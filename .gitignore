@@ -4,4 +4,6 @@ __pycache__/
 *.pyc
 *.zip
 demo_artifacts/
+test_payloads/
 patchops-key.pem
+/tmp/patchops_*

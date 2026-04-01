@@ -88,7 +88,7 @@ You MUST return exactly {len(vulnerabilities)} objects in the fixes array, no mo
 Return ONLY the JSON object. Start with {{ and end with }}. No other text."""
 
         # Call LLM for batch patching
-        batch_result = safe_call_llm_json(prompt, max_tokens=8000, retries=2)
+        batch_result = safe_call_llm_json(prompt, max_tokens=4000, retries=2)
 
         if "error" in batch_result:
             return {
@@ -186,4 +186,3 @@ Return ONLY the JSON object. Start with {{ and end with }}. No other text."""
             "patched_code": "",
             "completed_fixes": []
         }
-

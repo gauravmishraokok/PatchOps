@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PatchOps Security Terminal</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="terminal">
+        <div class="terminal-header">
+            <div class="terminal-controls">
+                <span class="control close"></span>
+                <span class="control minimize"></span>
+                <span class="control maximize"></span>
+            </div>
+            <div class="terminal-title">PatchOps Security Terminal v1.0</div>
+        </div>
+        
+        <div class="terminal-body">
+            <div id="terminal-output" class="terminal-output"></div>
+            <div class="terminal-input-line">
+                <span class="prompt">$</span>
+                <input type="text" id="terminal-input" class="terminal-input" placeholder="Type 'run' to start security analysis..." autocomplete="off">
+            </div>
+        </div>
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+</html>

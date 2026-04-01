@@ -65,7 +65,7 @@ STRICT JSON SCHEMA:
 Return ONLY the JSON object. Start with {{ and end with }}. No other text. Every field must be present."""
 
         # Call LLM with consolidated findings
-        result = safe_call_llm_json(prompt, max_tokens=6000, retries=2)
+        result = safe_call_llm_json(prompt, max_tokens=3000, retries=2)
 
         # Validate and clean the response
         if "error" in result:
