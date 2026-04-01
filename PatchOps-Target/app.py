@@ -74,48 +74,5 @@ def get_logs():
         logs = f.read()
     return jsonify({"logs": logs})
 
-# CWE-287: Broken Authentication
-@app.route('/login', methods=['POST'])
-def login():
-    username = request.json.get('username')
-    password = request.json.get('password')
-    # Plaintext password comparison, no salt/hash
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE username = ? AND password = ?", (username, password))
-    user = cursor.fetchone()
-    conn.close()
-    if user:
-        return jsonify({"token": SECRET_TOKEN})
-    return jsonify({"error": "Invalid credentials"}), 401
-
-# CWE-862: Missing Authorization
-@app.route('/admin/delete_user/<user_id>', methods=['DELETE'])
-def delete_user(user_id):
-    # No authorization check!
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
-    conn.commit()
-    conn.close()
-    return jsonify({"status": "deleted"})
-
-# CWE-434: Unrestricted File Upload
-@app.route('/upload', methods=['POST'])
-def upload_file():
-    file = request.files.get('file')
-    filename = file.filename
-    file.save(os.path.join('/tmp', filename))
-    return jsonify({"filename": filename})
-
-# CWE-22: Path Traversal
-@app.route('/download')
-def download_file():
-    filename = request.args.get('file')
-    filepath = os.path.join('/var/www/files', filename)
-    with open(filepath, 'r') as f:
-        content = f.read()
-    return jsonify({"content": content})
-
 if __name__ == '__main__':
     app.run(port=5000, debug=True)

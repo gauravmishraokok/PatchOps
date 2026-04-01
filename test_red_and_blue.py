@@ -22,7 +22,7 @@ def run_local_tests():
         return
 
     # 2. INVOKE THE LIVE ANALYZER (LLM CALL #1)
-    print("🔍 ANALYZER: Exhaustive Top 8 Sweep...")
+    print("🔍 ANALYZER: Exhaustive Vulnerability Sweep...")
     analyzer_event = {"source_code": live_source_code}
     analyzer_result = code_analyzer_handler(analyzer_event, None)
     
@@ -93,10 +93,10 @@ def run_local_tests():
         print(f"🔗 PR URL: {pr_result.get('pr_url')}")
         print(f"🌿 Branch: {pr_result.get('branch_name')}\n")
         print(f"📊 SUMMARY:")
-        print(f"   - Vulnerabilities Found: {len(vulnerabilities)}")
-        print(f"   - Vulnerabilities Fixed: {len(completed_fixes)}")
-        print(f"   - LLM Calls Made: 3 (Analyzer → Batch Patcher → PR Generator)")
-        print(f"   - Pipeline Status: ✅ SUCCESS")
+        print(f"   • Vulnerabilities Found: {len(vulnerabilities)}")
+        print(f"   • Vulnerabilities Fixed: {len(completed_fixes)}")
+        print(f"   • LLM Calls Made: 3 (Analyzer → Batch Patcher → PR Generator)")
+        print(f"   • Pipeline Status: ✅ SUCCESS")
     else:
         print(f"❌ PR Generator Failed: {pr_result.get('error_message')}")
 

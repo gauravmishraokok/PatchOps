@@ -29,7 +29,7 @@ SOURCE CODE:
 ```
 
 CRITICAL BOUNDARY DIRECTIVE:
-You are strictly limited to identifying ONLY the following 8 vulnerability categories:
+You must perform an exhaustive sweep for EXACTLY these 8 vulnerability categories:
 
 1. Hardcoded Secrets (CWE-798)
 2. SQL Injection (CWE-89)
@@ -42,20 +42,22 @@ You are strictly limited to identifying ONLY the following 8 vulnerability categ
 
 RULES:
 
-1. If you find a vulnerability that is NOT on this exact list of 8, YOU MUST IGNORE IT.
-2. If you find multiple instances of the same vulnerability type (e.g., SQL Injection in 3 different routes), CONSOLIDATE them into a single JSON object for that category, listing all affected lines in the vulnerable_lines array.
-3. You must NEVER return more than 8 objects in the vulnerabilities array.
-4. Each vulnerability MUST include ALL required fields: vulnerability_type, cwe, severity, vulnerable_lines, attack_vector.
+1. You MUST return an array of exactly 8 objects, one for each category above.
+2. For each category, evaluate logically if it is genuinely present in the given code. Set "is_present" to true or false.
+3. If "is_present" is true, provide the severity, vulnerable_lines (exact match of the code), and an attack_vector explanation.
+4. If "is_present" is false, leave vulnerable_lines as an empty array and attack_vector as empty string.
+5. If the same vulnerability appears multiple times, CONSOLIDATE them into the single object.
 
 STRICT JSON SCHEMA:
 {{
-    "vulnerabilities": [
+    "analysis": [
         {{
             "vulnerability_type": "<Type, e.g., SQL Injection>",
             "cwe": "<CWE number, e.g., CWE-89>",
-            "severity": "<CRITICAL/HIGH/MEDIUM>",
-            "vulnerable_lines": ["<exact string 1>", "<exact string 2>", "<exact string 3>"],
-            "attack_vector": "<Comprehensive attack explanation covering all instances>"
+            "is_present": <true/false boolean value only>,
+            "severity": "<CRITICAL/HIGH/MEDIUM/NONE>",
+            "vulnerable_lines": ["<exact string 1>", "<exact string 2>"],
+            "attack_vector": "<Comprehensive attack explanation>"
         }}
     ]
 }}
@@ -69,13 +71,15 @@ Return ONLY the JSON object. Start with {{ and end with }}. No other text. Every
         if "error" in result:
             return result
 
-        vulnerabilities = result.get("vulnerabilities", [])
+        analysis = result.get("analysis", [])
         
-        # Filter to ensure all required fields are present
+        # Filter to ensure we only return genuinely present vulnerabilities
         validated_vulns = []
-        for vuln in vulnerabilities:
-            if all(key in vuln for key in ["vulnerability_type", "cwe", "severity", "vulnerable_lines", "attack_vector"]):
-                validated_vulns.append(vuln)
+        for vuln in analysis:
+            is_present = vuln.get("is_present")
+            if is_present is True or str(is_present).lower() == "true":
+                if all(key in vuln for key in ["vulnerability_type", "cwe", "severity", "vulnerable_lines", "attack_vector"]):
+                    validated_vulns.append(vuln)
         
         return {"vulnerabilities": validated_vulns}
 
