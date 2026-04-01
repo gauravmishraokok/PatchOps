@@ -23,12 +23,12 @@ def get_client() -> Groq:
 def call_llm(prompt: str, max_tokens: int = 2000) -> str:
     """
     Makes a single chat completion call to Groq.
-    Uses model "llama-3.1-8b-instant".
+    Uses model "llama-3.3-70b-versatile".
     Raises exception on API error (do not swallow).
     """
     client = get_client()
     response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
+        model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
         max_tokens=max_tokens
     )
