@@ -20,6 +20,8 @@ VULNERABILITY_TYPE: {vulnerability_type}
 EXPLOIT_CODE (proof-of-concept):
 {exploit_code}
 
+CRITICAL RULE: You are reviewing a surgical patch. The patch writer was instructed to make the minimal possible changes to fix the {vulnerability_type}. DO NOT reject the patch if you see other unrelated vulnerabilities (like hardcoded keys or poor formatting) in the surrounding code. Only evaluate if the specific vulnerability requested was neutralized.
+
 Your strict validation checklist:
 
 1. EXPLOIT NEUTRALIZATION: Does the patched code actually prevent the exploit? Trace through the exploit logic step-by-step.
@@ -51,6 +53,7 @@ def lambda_handler(event, context=None):
         patched_code = event.get("patched_code", "")
         vulnerability_type = event.get("vulnerability_type", "")
         exploit_code = event.get("exploit_code", "")
+        modifications_applied = event.get("modifications_applied", [])
 
         if not all([original_code, patched_code, vulnerability_type]):
             return {
@@ -67,6 +70,16 @@ def lambda_handler(event, context=None):
             vulnerability_type=vulnerability_type,
             exploit_code=exploit_code
         )
+
+        # Add modifications context if available
+        if modifications_applied:
+            import json
+            prompt += f"""\n
+The patch writer applied the following surgical modifications to the code:
+{json.dumps(modifications_applied, indent=2)}
+
+Focus your review specifically on these changed lines to verify they successfully neutralize the {vulnerability_type} without breaking the surrounding logic.
+"""
 
         # Get LLM review
         review_result = safe_call_llm_json(prompt=prompt, max_tokens=3000, retries=2)

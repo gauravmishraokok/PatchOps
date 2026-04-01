@@ -15,18 +15,14 @@ from .template import generate_pr_body
 def lambda_handler(event, context=None):
     """
     PR Generator Lambda Handler.
-    Creates a GitHub Pull Request with the approved security patch.
+    Creates a GitHub Pull Request with the approved security patches.
     """
     try:
         # Extract input fields
         repo_full_name = event.get("repo_full_name", "")
         file_path = event.get("file_path", "")
         final_patch = event.get("final_patch", "")
-        vulnerability_type = event.get("vulnerability_type", "")
-        cwe = event.get("cwe", "")
-        severity = event.get("severity", "")
-        exploit_evidence = event.get("exploit_evidence", "")
-        changes_made = event.get("changes_made", [])
+        fixed_vulnerabilities = event.get("fixed_vulnerabilities", [])
 
         # Validate required fields
         if not all([repo_full_name, file_path, final_patch]):
@@ -69,7 +65,8 @@ def lambda_handler(event, context=None):
         current_file_sha = file_contents.sha
 
         # Update the file on the new branch with the patched code
-        commit_message = f"Auto-patch: Fix {vulnerability_type}"
+        vulnerability_summary = f"{len(fixed_vulnerabilities)} vulnerabilities" if fixed_vulnerabilities else "security fixes"
+        commit_message = f"Auto-patch: Fix {vulnerability_summary}"
         repo.update_file(
             path=file_path,
             message=commit_message,
@@ -78,18 +75,18 @@ def lambda_handler(event, context=None):
             branch=branch_name
         )
 
-        # Generate the PR body markdown
-        pr_body = generate_pr_body(
-            vulnerability_type=vulnerability_type,
-            cwe=cwe,
-            severity=severity,
-            exploit_evidence=exploit_evidence,
-            changes_made_list=changes_made
-        )
+        # Generate the PR body markdown using the new dynamic template
+        pr_body = generate_pr_body(fixed_vulnerabilities_list=fixed_vulnerabilities)
+
+        # Create the Pull Request title
+        if fixed_vulnerabilities:
+            pr_title = f"🔒 Security Patch: {len(fixed_vulnerabilities)} Vulnerabilities Fixed"
+        else:
+            pr_title = "🔒 Security Patch: Autonomous Fixes"
 
         # Create the Pull Request
         pr = repo.create_pull(
-            title=f"🔒 Security Patch: {vulnerability_type}",
+            title=pr_title,
             body=pr_body,
             head=branch_name,
             base=default_branch

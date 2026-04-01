@@ -11,105 +11,140 @@ from lambdas.shared.utils import safe_call_llm_json, extract_code_block
 
 def lambda_handler(event, context=None):
     """
-    Patch Writer Lambda Handler.
-    Rewrites vulnerable code to safely neutralize exploits.
+    Batch Patch Writer Lambda Handler.
+    Accepts an array of vulnerabilities and fixes ALL of them in a single LLM call.
     """
     try:
         source_code = event.get("source_code", "")
-        vulnerability_type = event.get("vulnerability_type", "")
-        vulnerable_lines = event.get("vulnerable_lines", [])
-        exploit_code = event.get("exploit_code", "")
-        previous_patch_failed = event.get("previous_patch_failed", False)
+        vulnerabilities = event.get("vulnerabilities", [])
 
-        if not all([source_code, vulnerability_type, exploit_code]):
+        if not source_code:
             return {
-                "error": "Missing required fields: source_code, vulnerability_type, exploit_code",
+                "error": "Missing source_code",
                 "patched_code": "",
-                "changes_made": [],
-                "root_cause": ""
+                "completed_fixes": []
             }
 
-        # Format vulnerable lines for the prompt
-        vulnerable_lines_str = "\n".join(vulnerable_lines) if vulnerable_lines else "(analysis required)"
+        if not vulnerabilities:
+            return {
+                "patched_code": source_code,
+                "completed_fixes": []
+            }
 
-        # Build the strict system prompt with JSON contract
+        # Format vulnerabilities for the prompt
+        vulns_str = json.dumps(vulnerabilities, indent=2)
+
+        # Build the batch patcher prompt
         prompt = f"""You are an elite Application Security Engineer.
-Your task is to rewrite the provided Python file to fix a {vulnerability_type} vulnerability.
+You have been handed a source file containing multiple vulnerabilities. You must fix ALL of them in a single response.
 
 ORIGINAL CODE:
+```python
 {source_code}
+```
 
-VULNERABLE LINES:
-{vulnerable_lines_str}
+VULNERABILITIES TO FIX:
+{vulns_str}
 
-EXPLOIT EVIDENCE (This exploit successfully bypassed the original code. Your fix MUST prevent this):
-{exploit_code}
-"""
+CRITICAL RULES:
+1. DO NOT rewrite the entire file. Use surgical Search & Replace blocks only.
+2. You must provide EXACTLY ONE fix object per vulnerability listed. If there are 8 vulnerabilities in the input, return exactly 8 fix objects in the fixes array.
+3. The search text must EXACTLY match the original code, including all whitespace and indentation.
+4. All newlines in strings MUST be escaped as \\n and all quotes as \\".
+5. Group each vulnerability's modifications together in the fixes array.
+6. Be exhaustive but ONLY within the scope of what's provided. Do not create extra fixes.
 
-        if previous_patch_failed:
-            prompt += "\nWARNING: Your previous patch attempt FAILED the regression tests. You must try a fundamentally different approach. Do not repeat the same failed fix.\n"
+STRICT JSON SCHEMA (EXACTLY {len(vulnerabilities)} FIXES):
+{{
+    "fixes": [
+        {{
+            "vulnerability_type": "<e.g., SQL Injection>",
+            "cwe": "<e.g., CWE-89>",
+            "changes_made": ["Change 1", "Change 2"],
+            "modifications": [
+                {{
+                    "search": "<EXACT text block from original code, escaped properly>",
+                    "replace": "<Secure replacement code, escaped properly>"
+                }}
+            ]
+        }}
+    ]
+}}
 
-        # THE JSON CONTRACT (Critical for reliability)
-        prompt += """\nYou must output ONLY a valid JSON object. Do not wrap the JSON in markdown fences. Do not include any conversational text before or after the JSON.
+You MUST return exactly {len(vulnerabilities)} objects in the fixes array, no more, no less.
+Return ONLY the JSON object. Start with {{ and end with }}. No other text."""
 
-CRITICAL JSON FORMATTING RULES:
-You are returning a large block of Python code inside a JSON string. You MUST adhere to standard JSON escaping rules:
-1. You MUST escape all newlines in the Python code as `\\n`. DO NOT output actual raw, physical line breaks inside the `patched_code` string.
-2. You MUST escape all double quotes inside the Python code as `\\"`.
-3. You MUST escape all tabs as `\\t`.
-4. Your output must be parseable by Python's standard `json.loads()` function.
+        # Call LLM for batch patching
+        batch_result = safe_call_llm_json(prompt, max_tokens=8000, retries=2)
 
-Example of CORRECT escaping:
-{
-    "patched_code": "import sqlite3\\nfrom flask import Flask\\n\\napp = Flask(__name__)\\ndef get_user():\\n    user_id = request.args.get(\\"id\\")\\n    ...",
-    "changes_made": ["Use parameterized queries instead of f-strings", "Remove raw SQL substitution"],
-    "root_cause": "Unsanitized user input was directly interpolated into SQL query using f-string"
-}
-
-You must strictly adhere to this exact JSON schema with proper escaping:
-{
-    "patched_code": "<string containing the complete, executable, patched Python file with all newlines as \\n and quotes as \\">",
-    "changes_made": ["<string bullet point 1>", "<string bullet point 2>"],
-    "root_cause": "<string briefly explaining the original flaw>"
-}
-
-Return ONLY the JSON object. Start with { and end with }. No other text."""
-
-        # Execute with higher token limit (code rewrites need more tokens)
-        patch_result = safe_call_llm_json(prompt=prompt, max_tokens=6000, retries=2)
-
-        if "error" in patch_result:
+        if "error" in batch_result:
             return {
-                "error": f"Patch generation failed: {patch_result.get('error')}",
+                "error": f"Batch patch generation failed: {batch_result.get('error')}",
                 "patched_code": "",
-                "changes_made": [],
-                "root_cause": ""
+                "completed_fixes": []
             }
 
-        # Extract patch fields
-        patched_code = patch_result.get("patched_code", "")
-        changes_made = patch_result.get("changes_made", [])
-        root_cause = patch_result.get("root_cause", "")
+        current_code = source_code
+        completed_fixes = []
+        failed_fixes = []
 
-        # Validate we got actual code back
-        if not patched_code or patched_code.strip() == "":
-            return {
-                "error": "LLM failed to generate patched code",
-                "patched_code": "",
-                "changes_made": changes_made,
-                "root_cause": root_cause
-            }
+        # Process each fix from the batch
+        for fix in batch_result.get("fixes", []):
+            vuln_type = fix.get("vulnerability_type", "Unknown")
+            cwe = fix.get("cwe", "")
+            modifications = fix.get("modifications", [])
+            changes_made = fix.get("changes_made", [])
+
+            fix_successful = True
+            applied_modifications = []
+
+            for mod in modifications:
+                search_text = mod.get("search", "")
+                replace_text = mod.get("replace", "")
+
+                if not search_text:
+                    continue
+
+                # 🔨 TRY EXACT MATCH FIRST
+                if search_text in current_code:
+                    current_code = current_code.replace(search_text, replace_text, 1)  # Replace ONE instance at a time
+                    applied_modifications.append(mod)
+                # 🔨 FALLBACK: TRY STRIP WHITESPACE
+                elif search_text.strip() and search_text.strip() in current_code:
+                    current_code = current_code.replace(search_text.strip(), replace_text.strip(), 1)
+                    applied_modifications.append(mod)
+                else:
+                    # ⚠️ Could not find the exact string - mark as partially failed
+                    fix_successful = False
+                    print(f"⚠️  WARNING: Could not apply patch for {vuln_type} - Search string not found in current code.")
+                    break
+
+            if fix_successful and applied_modifications:
+                completed_fixes.append({
+                    "type": vuln_type,
+                    "cwe": cwe,
+                    "changes_made": changes_made,
+                    "exploit_evidence": next((v.get("attack_vector", "N/A") for v in vulnerabilities if v.get("cwe") == cwe), "N/A")
+                })
+            else:
+                failed_fixes.append({
+                    "type": vuln_type,
+                    "cwe": cwe,
+                    "reason": "Could not locate search string in code"
+                })
 
         return {
-            "patched_code": patched_code,
-            "changes_made": changes_made,
-            "root_cause": root_cause
+            "patched_code": current_code,
+            "completed_fixes": completed_fixes,
+            "failed_fixes": failed_fixes if failed_fixes else None,
+            "total_vulnerabilities": len(vulnerabilities),
+            "successful_patches": len(completed_fixes)
         }
 
     except Exception as e:
         return {
-            "error": f"Patch writer exception: {str(e)}",
+            "error": f"Batch patch writer exception: {str(e)}",
             "patched_code": "",
-            "changes_made": [],
-            "root_cause": ""
+            "completed_fixes": []
         }
+

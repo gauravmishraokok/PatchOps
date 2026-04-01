@@ -5,80 +5,79 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)
 ))))
-from lambdas.shared.utils import safe_call_llm_json, call_llm, extract_code_block
+from lambdas.shared.utils import safe_call_llm_json
 
 
-ANALYZER_PROMPT = """You are a security vulnerability analyst.
-
-Analyze the following Python source code and identify the most critical security vulnerability.
-
-CVE hint: {cve_description}
-
-Source code:
-{source_code}
-
-Return a JSON object with this exact structure. No explanation outside the JSON. No markdown fences. Start your response with {{ and end with }}:
-
-{{
-  "vulnerable_lines": ["the exact line of code that is vulnerable"],
-  "line_numbers": [<line number as integer>],
-  "vulnerability_type": "<specific type e.g. SQL Injection, Command Injection, Path Traversal>",
-  "explanation": "<2-3 sentences explaining why this is vulnerable and what an attacker can do>",
-  "attack_vector": "<concrete example: HTTP method, path, parameter, and payload>",
-  "severity": "<HIGH or MEDIUM or LOW>",
-  "cwe": "<CWE number e.g. CWE-89>"
-}}"""
-
-
-def handler(event, context):
+def handler(event, context=None):
+    """
+    Hard Boundary Code Analyzer Lambda Handler.
+    Strictly limited to Top 8 vulnerability categories with consolidation.
+    """
     try:
-        # 1. Validate input
         if not event or "source_code" not in event:
             return {"error": "No source_code provided"}
 
         source_code = event.get("source_code", "")
-        cve_description = event.get("cve_description", "")
 
-        # 2. Format prompt
-        prompt = ANALYZER_PROMPT.format(
-            source_code=source_code,
-            cve_description=cve_description
-        )
+        # The Hard Boundary Vulnerability Scanning Prompt
+        prompt = f"""You are an Elite Static Application Security Testing (SAST) engine.
+You are evaluating this Python Flask application.
 
-        # 3. Call LLM
-        result = safe_call_llm_json(prompt, max_tokens=1000)
+SOURCE CODE:
+```python
+{source_code}
+```
 
-        # 4. Handle LLM error
-        if not isinstance(result, dict):
-            return {"error": "Invalid response from LLM"}
+CRITICAL BOUNDARY DIRECTIVE:
+You are strictly limited to identifying ONLY the following 8 vulnerability categories:
 
+1. Hardcoded Secrets (CWE-798)
+2. SQL Injection (CWE-89)
+3. Command Injection (CWE-78)
+4. Path Traversal (CWE-22)
+5. Cross-Site Scripting / XSS (CWE-79)
+6. Broken Access Control / IDOR (CWE-284)
+7. Unsafe Deserialization (CWE-502)
+8. Server-Side Request Forgery / SSRF (CWE-918)
+
+RULES:
+
+1. If you find a vulnerability that is NOT on this exact list of 8, YOU MUST IGNORE IT.
+2. If you find multiple instances of the same vulnerability type (e.g., SQL Injection in 3 different routes), CONSOLIDATE them into a single JSON object for that category, listing all affected lines in the vulnerable_lines array.
+3. You must NEVER return more than 8 objects in the vulnerabilities array.
+4. Each vulnerability MUST include ALL required fields: vulnerability_type, cwe, severity, vulnerable_lines, attack_vector.
+
+STRICT JSON SCHEMA:
+{{
+    "vulnerabilities": [
+        {{
+            "vulnerability_type": "<Type, e.g., SQL Injection>",
+            "cwe": "<CWE number, e.g., CWE-89>",
+            "severity": "<CRITICAL/HIGH/MEDIUM>",
+            "vulnerable_lines": ["<exact string 1>", "<exact string 2>", "<exact string 3>"],
+            "attack_vector": "<Comprehensive attack explanation covering all instances>"
+        }}
+    ]
+}}
+
+Return ONLY the JSON object. Start with {{ and end with }}. No other text. Every field must be present."""
+
+        # Call LLM with consolidated findings
+        result = safe_call_llm_json(prompt, max_tokens=6000, retries=2)
+
+        # Validate and clean the response
         if "error" in result:
             return result
 
-        # 5. Validate required keys
-        required_keys = ["vulnerability_type", "attack_vector", "vulnerable_lines"]
-        missing_keys = [k for k in required_keys if k not in result or not result.get(k)]
-
-        if missing_keys:
-            return {"error": f"Response missing required keys: {missing_keys}"}
-
-        # 6. Soft validation rule
-        attack_vector = result.get("attack_vector", "")
-        vulnerability_type = result.get("vulnerability_type", "")
-
-        warning = None
-
-        if not vulnerability_type:
-            warning = "vulnerability_type is empty"
-
-        if not any(x in attack_vector for x in ["GET", "POST", "/"]):
-            warning = (warning + "; " if warning else "") + "attack_vector may not be a valid HTTP pattern"
-
-        if warning:
-            result["warning"] = warning
-
-        # 7. Return final structured result
-        return result
+        vulnerabilities = result.get("vulnerabilities", [])
+        
+        # Filter to ensure all required fields are present
+        validated_vulns = []
+        for vuln in vulnerabilities:
+            if all(key in vuln for key in ["vulnerability_type", "cwe", "severity", "vulnerable_lines", "attack_vector"]):
+                validated_vulns.append(vuln)
+        
+        return {"vulnerabilities": validated_vulns}
 
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": f"Code analyzer exception: {str(e)}"}

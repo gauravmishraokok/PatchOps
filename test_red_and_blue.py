@@ -2,128 +2,101 @@ import os
 import json
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
-# Import your handlers
+from lambdas.code_analyzer.handler import handler as code_analyzer_handler
 from lambdas.patch_writer.handler import lambda_handler as patch_writer_handler
-from lambdas.security_reviewer.handler import lambda_handler as security_reviewer_handler
 from lambdas.pr_generator.handler import lambda_handler as pr_generator_handler
 
 def run_local_tests():
-    print("🚀 STARTING BLUE TEAM LOCAL INTEGRATION TEST...\n")
+    print("🚀 STARTING BATCH-PROCESSING PIPELINE (Optimized for Rate Limits)...\n")
 
-    # ---------------------------------------------------------
-    # MOCK DATA (Simulating output from Person B's Red Team)
-    # ---------------------------------------------------------
-    mock_source_code = """
-from flask import Flask, request, jsonify
-import sqlite3
+    # 1. READ THE REAL VULNERABLE FILE
+    target_file_path = "PatchOps-Target/app.py"
+    try:
+        with open(target_file_path, "r") as f:
+            live_source_code = f.read()
+        print(f"✅ Successfully loaded {target_file_path}\n")
+    except FileNotFoundError:
+        print(f"❌ ERROR: Could not find {target_file_path}. Make sure the path is correct.")
+        return
 
-app = Flask(__name__)
+    # 2. INVOKE THE LIVE ANALYZER (LLM CALL #1)
+    print("🔍 ANALYZER: Exhaustive Top 8 Sweep...")
+    analyzer_event = {"source_code": live_source_code}
+    analyzer_result = code_analyzer_handler(analyzer_event, None)
+    
+    if "error" in analyzer_result:
+        print(f"❌ Analyzer Failed: {analyzer_result['error']}")
+        return
 
-@app.route('/health')
-def health():
-    return jsonify({"status": "ok"})
+    vulnerabilities = analyzer_result.get("vulnerabilities", [])
+    print(f"✅ Found {len(vulnerabilities)} vulnerabilities:\n")
+    for i, v in enumerate(vulnerabilities, 1):
+        vuln_type = v.get('vulnerability_type', 'Unknown')
+        cwe = v.get('cwe', 'CWE-Unknown')
+        severity = v.get('severity', 'UNKNOWN')
+        print(f"  {i}. {vuln_type} ({cwe}) [{severity}]")
 
-@app.route('/user')
-def get_user():
-    user_id = request.args.get('id')
-    conn = sqlite3.connect('database.db')
-    cursor = conn.cursor()
-    # VULNERABLE LINE BELOW
-    query = f"SELECT username, email, role FROM users WHERE id = {user_id}"
-    cursor.execute(query)
-    users = cursor.fetchall()
-    return jsonify({"users": users})
+    if not vulnerabilities:
+        print("\n🎉 Code is secure! No patches needed.")
+        return
 
-if __name__ == '__main__':
-    app.run(port=5000)
-"""
-
-    mock_exploit_code = """
-import requests
-try:
-    response = requests.get("http://localhost:5000/user?id=-1 UNION SELECT username, email, role FROM users")
-    data = response.json()
-    if len(data.get("users", [])) > 1:
-        print("EXPLOIT_SUCCESS")
-    else:
-        print("EXPLOIT_FAILED")
-except Exception as e:
-    print(f"Error: {e}")
-"""
-
-    vulnerability_type = "SQL Injection"
-    vulnerable_lines = ["query = f\"SELECT username, email, role FROM users WHERE id = {user_id}\""]
-    cwe = "CWE-89"
-    severity = "HIGH"
-
-    # ---------------------------------------------------------
-    # TEST 1: Patch Writer
-    # ---------------------------------------------------------
-    print("🧪 TEST 1: Invoking Patch Writer...")
+    # 3. INVOKE BATCH PATCHER (LLM CALL #2) - FIX ALL IN ONE SHOT
+    print(f"\n{'='*60}")
+    print(f"🛠️  BATCH PATCHER: Fixing all {len(vulnerabilities)} vulnerabilities...")
+    print(f"{'='*60}\n")
+    
     patch_event = {
-        "source_code": mock_source_code,
-        "vulnerability_type": vulnerability_type,
-        "vulnerable_lines": vulnerable_lines,
-        "exploit_code": mock_exploit_code,
-        "previous_patch_failed": False
+        "source_code": live_source_code,
+        "vulnerabilities": vulnerabilities  # Pass entire array!
     }
     
     patch_result = patch_writer_handler(patch_event, None)
     
-    # DEBUG: Print raw dictionary to see what's actually returned
-    print(f"\n📋 RAW DICT RETURNED: {json.dumps(patch_result, indent=2)}\n")
+    if "error" in patch_result:
+        print(f"❌ Batch Patcher Failed: {patch_result['error']}")
+        return
+        
+    completed_fixes = patch_result.get("completed_fixes", [])
+    failed_fixes = patch_result.get("failed_fixes", [])
+    current_source_code = patch_result.get("patched_code")
     
-    print("✅ Patch Writer completed.")
-    print(f"Changes Made: {patch_result.get('changes_made')}")
-    print(f"Root Cause: {patch_result.get('root_cause')}\n")
+    print(f"✅ Batch Patching Complete:")
+    print(f"   ✓ Successfully fixed: {patch_result.get('successful_patches')}/{patch_result.get('total_vulnerabilities')}")
     
-    patched_code = patch_result.get("patched_code")
-    if not patched_code:
-        print("❌ ERROR: Patch Writer did not return patched_code.")
+    if failed_fixes:
+        print(f"   ✗ Failed to fix: {len(failed_fixes)}")
+        for fail in failed_fixes:
+            print(f"      - {fail['type']} ({fail['cwe']}): {fail['reason']}")
+
+    if not completed_fixes:
+        print("\n⚠️  No patches were successfully applied.")
         return
 
-    # ---------------------------------------------------------
-    # TEST 2: Security Reviewer
-    # ---------------------------------------------------------
-    print("🧪 TEST 2: Invoking Security Reviewer...")
-    reviewer_event = {
-        "original_code": mock_source_code,
-        "patched_code": patched_code,
-        "vulnerability_type": vulnerability_type,
-        "exploit_code": mock_exploit_code
-    }
+    # 4. PR GENERATION (LLM CALL #3 - GitHub API)
+    print(f"\n{'='*60}")
+    print(f"📝 PR GENERATOR: Creating pull request with {len(completed_fixes)} fixes...")
+    print(f"{'='*60}\n")
     
-    review_result = security_reviewer_handler(reviewer_event, None)
-    print("✅ Security Reviewer completed.")
-    print(f"Approved: {review_result.get('patch_approved')}")
-    print(f"Feedback: {review_result.get('feedback')}\n")
-    
-    final_patch = review_result.get("final_patch", patched_code)
-
-    # ---------------------------------------------------------
-    # TEST 3: PR Generator (WARNING: THIS WILL HIT GITHUB)
-    # ---------------------------------------------------------
-    print("🧪 TEST 3: Invoking PR Generator...")
     pr_event = {
-        "repo_full_name": "gauravmishraokok/PatchOps-Target", # Make sure this repo exists!
+        "repo_full_name": "gauravmishraokok/PatchOps-Target",
         "file_path": "app.py",
-        "final_patch": final_patch,
-        "vulnerability_type": vulnerability_type,
-        "cwe": cwe,
-        "severity": severity,
-        "exploit_evidence": mock_exploit_code,
-        "changes_made": patch_result.get("changes_made", ["Fixed SQL Injection"])
+        "final_patch": current_source_code,
+        "fixed_vulnerabilities": completed_fixes  # NEW SCHEMA: Pass array directly
     }
     
     pr_result = pr_generator_handler(pr_event, None)
     
     if pr_result.get("status") == "SUCCESS":
-        print("✅ PR Generator completed successfully!")
+        print("✅ Pull Request Created Successfully!")
         print(f"🔗 PR URL: {pr_result.get('pr_url')}")
-        print(f"🌿 Branch: {pr_result.get('branch_name')}")
+        print(f"🌿 Branch: {pr_result.get('branch_name')}\n")
+        print(f"📊 SUMMARY:")
+        print(f"   - Vulnerabilities Found: {len(vulnerabilities)}")
+        print(f"   - Vulnerabilities Fixed: {len(completed_fixes)}")
+        print(f"   - LLM Calls Made: 3 (Analyzer → Batch Patcher → PR Generator)")
+        print(f"   - Pipeline Status: ✅ SUCCESS")
     else:
         print(f"❌ PR Generator Failed: {pr_result.get('error_message')}")
 
