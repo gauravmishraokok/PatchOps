@@ -9,6 +9,7 @@ Required: pip install groq
 import json
 import os
 import re
+import httpx
 from groq import Groq
 
 __all__ = ['call_llm', 'parse_json_response', 'extract_code_block', 'safe_call_llm_json']
@@ -18,7 +19,15 @@ def get_client() -> Groq:
     Returns a Groq client.
     Reads GROQ_API_KEY from os.environ.
     """
-    return Groq(api_key=os.environ.get("GROQ_API_KEY"))
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        raise ValueError("GROQ_API_KEY environment variable is not set")
+    
+    # Create explicit httpx client to avoid proxy configuration issues
+    http_client = httpx.Client()
+    
+    # Initialize client with explicit http_client to avoid proxy parameter issues
+    return Groq(api_key=api_key, http_client=http_client)
 
 def call_llm(prompt: str, max_tokens: int = 2000) -> str:
     """
