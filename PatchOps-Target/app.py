@@ -3,101 +3,76 @@ import sqlite3
 import subprocess
 import pickle
 import os
+import logging
 
 app = Flask(__name__)
 
-# 🔥 Hardcoded secrets (easy detection)
+# CWE-798: Hardcoded Secrets
 DATABASE_PASSWORD = "admin123"
-API_KEY = "sk-test-abcdef"
-SECRET_TOKEN = "super-secret-token"
+API_KEY = "sk-1234567890abcdef"
+SECRET_TOKEN = "supersecrettoken2024"
 
+# Database connection
 DB_PATH = "users.db"
-
 
 @app.route('/health')
 def health():
     return jsonify({"status": "ok"})
 
-
-# 🔥 SQL Injection (fully exploitable)
+# CWE-89: SQL Injection
 @app.route('/user')
 def get_user():
     user_id = request.args.get('id')
-
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
-    query = f"SELECT id, username, email, role FROM users WHERE id = {user_id}"
+    query = f"SELECT username, email, role FROM users WHERE id = {user_id}"
     cursor.execute(query)
-
-    data = cursor.fetchall()
+    users = cursor.fetchall()
     conn.close()
+    return jsonify({"users": users})
 
-    return jsonify({"result": data})
+# CWE-78: Command Injection
+@app.route('/ping')
+def ping_host():
+    target_ip = request.args.get('ip')
+    command = f"ping -c 1 {target_ip}"
+    output = subprocess.check_output(command, shell=True, text=True)
+    return jsonify({"result": output})
 
+# CWE-502: Unsafe Deserialization
+@app.route('/deserialize')
+def deserialize_data():
+    data = request.args.get('data')
+    obj = pickle.loads(bytes.fromhex(data))
+    return jsonify({"object": str(obj)})
 
-# 🔥 Command Injection (very obvious exploit)
-@app.route('/exec')
-def exec_cmd():
-    cmd = request.args.get('cmd')
-
-    output = subprocess.getoutput(cmd)  # no filtering at all
-
-    return jsonify({"output": output})
-
-
-# 🔥 Unsafe Deserialization (RCE possible)
-@app.route('/deserialize', methods=["POST"])
-def deserialize():
-    raw = request.data
-
-    obj = pickle.loads(raw)  # direct RCE vector
-
-    return jsonify({"data": str(obj)})
-
-
-# 🔥 IDOR (no auth at all + sensitive fields)
-@app.route('/profile')
-def profile():
-    user_id = request.args.get('id')
-
+# CWE-639: Insecure Direct Object Reference (IDOR)
+@app.route('/profile/<user_id>')
+def get_profile(user_id):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
-    cursor.execute(f"SELECT username, email, password, ssn FROM users WHERE id = {user_id}")
-    user = cursor.fetchone()
-
+    cursor.execute("SELECT username, email, ssn FROM users WHERE id = ?", (user_id,))
+    profile = cursor.fetchone()
     conn.close()
+    return jsonify({"profile": profile})
 
-    return jsonify({"profile": user})
-
-
-# 🔥 Open Redirect
+# CWE-601: Open Redirect
 @app.route('/redirect')
 def open_redirect():
-    url = request.args.get('url')
-    return redirect(url)
+    redirect_url = request.args.get('url')
+    return redirect(redirect_url)
 
-
-# 🔥 Arbitrary File Read (VERY GOOD for agents)
-@app.route('/read')
-def read_file():
-    path = request.args.get('path')
-
-    with open(path, 'r') as f:
-        content = f.read()
-
-    return jsonify({"content": content})
-
-
-# 🔥 Debug endpoint (info leak)
-@app.route('/debug')
-def debug():
-    return jsonify({
-        "env": dict(os.environ),
-        "cwd": os.getcwd()
-    })
-
+# CWE-200: Sensitive Data Exposure
+@app.route('/logs')
+def get_logs():
+    logging.basicConfig(filename='app.log', level=logging.DEBUG)
+    logger = logging.getLogger()
+    logger.debug(f"User login attempt with IP: {request.remote_addr}")
+    logger.debug(f"Database password: {DATABASE_PASSWORD}")
+    logger.debug(f"API key: {API_KEY}")
+    with open('app.log', 'r') as f:
+        logs = f.read()
+    return jsonify({"logs": logs})
 
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
