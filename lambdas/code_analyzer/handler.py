@@ -1,10 +1,11 @@
 import sys
 import os
 
-# Ensure shared modules are importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
-
-from lambdas.shared.utils import safe_call_llm_json
+# Works both locally (from repo root) and in Lambda
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)
+))))
+from lambdas.shared.utils import safe_call_llm_json, call_llm, extract_code_block
 
 
 ANALYZER_PROMPT = """You are a security vulnerability analyst.

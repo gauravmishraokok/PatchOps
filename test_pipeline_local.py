@@ -1,5 +1,8 @@
 import os, sys
 
+# Cross-platform Python executable
+PYTHON = sys.executable
+
 # ==========================
 # ENVIRONMENT SETUP
 # ==========================
@@ -12,9 +15,11 @@ if not api_key:
 VULNERABLE_APP_SOURCE = """
 from flask import Flask, request, jsonify
 import sqlite3
+import tempfile
+import os
 
 app = Flask(__name__)
-DB_PATH = "/tmp/users.db"
+DB_PATH = os.path.join(tempfile.gettempdir(), "users.db")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -72,7 +77,7 @@ pp = pprint.PrettyPrinter(indent=2)
 # ==========================
 print("Checking Groq API connection...")
 try:
-    from lambdas.utils.groq_client import call_llm
+    from lambdas.shared.utils import call_llm
     response = call_llm(prompt="Reply with the single word: READY")
     if "READY" in response.upper():
         print("✅ Groq API connected")
@@ -87,7 +92,7 @@ except Exception as e:
 print("\n=== STEP 1: CODE ANALYZER ===")
 analyzer_event = {"source_code": VULNERABLE_APP_SOURCE}
 try:
-    analyzer_result = analyze(analyzer_event)
+    analyzer_result = analyze(analyzer_event, None)
     pp.pprint(analyzer_result)
     if "error" in analyzer_result:
         print("Analyzer error:", analyzer_result["error"])
@@ -101,7 +106,7 @@ except Exception as e:
 # ==========================
 print("\n=== STEP 2: EXPLOIT CRAFTER ===")
 try:
-    craft_result = craft_exploit(analyzer_result)
+    craft_result = craft_exploit(analyzer_result, None)
     exploit_code = craft_result.get("exploit_code", "")
     if exploit_code:
         print(exploit_code)
@@ -119,15 +124,15 @@ except Exception as e:
 # STEPS 3-8 — RUN APP AND EXPLOIT
 # ==========================
 flask_proc = None
-tmp_app_file = "/tmp/patchops_app_test.py"
-tmp_exploit_file = "/tmp/patchops_exploit_test.py"
+tmp_app_file = os.path.join(tempfile.gettempdir(), "patchops_app_test.py")
+tmp_exploit_file = os.path.join(tempfile.gettempdir(), "patchops_exploit_test.py")
 
 try:
     # STEP 3 — START FLASK APP
     print("\n=== STEP 3: STARTING TARGET APP ===")
     with open(tmp_app_file, "w") as f:
         f.write(VULNERABLE_APP_SOURCE)
-    flask_proc = subprocess.Popen(['python3', tmp_app_file],
+    flask_proc = subprocess.Popen([PYTHON, tmp_app_file],
                                   stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE,
                                   text=True)
@@ -158,7 +163,7 @@ try:
     print("\n=== STEP 5: RUNNING EXPLOIT ===")
     with open(tmp_exploit_file, "w") as f:
         f.write(exploit_code)
-    result = subprocess.run(['python3', tmp_exploit_file],
+    result = subprocess.run([PYTHON, tmp_exploit_file],
                             capture_output=True, text=True, timeout=30)
     print("=== EXPLOIT STDOUT ===")
     print(result.stdout)

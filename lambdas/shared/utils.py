@@ -2,38 +2,40 @@
 Shared utility module imported by all 4 agent Lambda handlers.
 Wraps the Groq API (OpenAI-compatible), handles JSON parsing,
 and strips markdown fences from LLM responses.
+
+Required: pip install groq
 """
 
 import json
 import os
 import re
-from openai import OpenAI
+from groq import Groq
 
 __all__ = ['call_llm', 'parse_json_response', 'extract_code_block', 'safe_call_llm_json']
 
-def get_client() -> OpenAI:
+def get_client() -> Groq:
     """
-    Returns an OpenAI client pointed at Groq's base URL.
+    Returns a Groq client.
     Reads GROQ_API_KEY from os.environ.
     """
-    return OpenAI(
-        api_key=os.environ.get("GROQ_API_KEY"),
-        base_url="https://api.groq.com/openai/v1"
-    )
+    return Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 def call_llm(prompt: str, max_tokens: int = 2000) -> str:
     """
     Makes a single chat completion call to Groq.
-    Uses model "llama3-70b-8192".
+    Uses model "llama-3.1-8b-instant".
     Raises exception on API error (do not swallow).
     """
     client = get_client()
     response = client.chat.completions.create(
-        model="llama3-70b-8192",
+        model="llama-3.1-8b-instant",
         messages=[{"role": "user", "content": prompt}],
         max_tokens=max_tokens
     )
-    return response.choices[0].message.content.strip()
+    text = response.choices[0].message.content
+    if not text or not text.strip():
+        raise ValueError("Groq returned empty response")
+    return text.strip()
 
 def parse_json_response(text: str) -> dict:
     """
@@ -86,7 +88,7 @@ def safe_call_llm_json(prompt: str, max_tokens: int = 2000, retries: int = 2) ->
     """
     Calls call_llm() and parse_json_response() with retry logic.
     """
-    last_raw_response = ""
+    raw = "<no response>"
     for attempt in range(retries + 1):
         try:
             current_prompt = prompt
@@ -96,14 +98,17 @@ def safe_call_llm_json(prompt: str, max_tokens: int = 2000, retries: int = 2) ->
                     "      No explanation. No markdown. No ```json fences. Start with { end with }."
                 )
             
-            last_raw_response = call_llm(current_prompt, max_tokens)
-            parsed_json = parse_json_response(last_raw_response)
+            raw = call_llm(current_prompt, max_tokens)
+            if not raw or not raw.strip():
+                raise ValueError("Empty response from LLM")
+            parsed_json = parse_json_response(raw)
             return parsed_json
-        except Exception:
+        except Exception as e:
+            raw_response = raw if 'raw' in dir() else '<no response>'
             if attempt == retries:
                 return {
-                    "error": f"JSON parse failed after {retries} attempts",
-                    "raw": last_raw_response
+                    "error": f"Failed after {retries} attempts: {str(e)}",
+                    "raw": raw_response
                 }
     
     return {}
