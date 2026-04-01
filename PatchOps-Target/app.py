@@ -1,22 +1,17 @@
-from flask import Flask, request, jsonify, redirect, abort
+from flask import Flask, request, jsonify, redirect
 import sqlite3
 import subprocess
-import json
+import pickle
 import os
-import logging
-import ipaddress
 
 app = Flask(__name__)
 
-# ✅ Load secrets from environment (NO hardcoding)
-DATABASE_PASSWORD = os.getenv("DATABASE_PASSWORD", "")
-API_KEY = os.getenv("API_KEY", "")
-SECRET_TOKEN = os.getenv("SECRET_TOKEN", "")
+# 🔥 Hardcoded secrets (easy detection)
+DATABASE_PASSWORD = "admin123"
+API_KEY = "sk-test-abcdef"
+SECRET_TOKEN = "super-secret-token"
 
 DB_PATH = "users.db"
-
-logging.basicConfig(filename='app.log', level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 
 @app.route('/health')
@@ -24,111 +19,85 @@ def health():
     return jsonify({"status": "ok"})
 
 
-# ✅ FIXED: SQL Injection (use parameterized queries)
+# 🔥 SQL Injection (fully exploitable)
 @app.route('/user')
 def get_user():
     user_id = request.args.get('id')
 
-    if not user_id or not user_id.isdigit():
-        return jsonify({"error": "Invalid user id"}), 400
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    query = f"SELECT id, username, email, role FROM users WHERE id = {user_id}"
+    cursor.execute(query)
+
+    data = cursor.fetchall()
+    conn.close()
+
+    return jsonify({"result": data})
+
+
+# 🔥 Command Injection (very obvious exploit)
+@app.route('/exec')
+def exec_cmd():
+    cmd = request.args.get('cmd')
+
+    output = subprocess.getoutput(cmd)  # no filtering at all
+
+    return jsonify({"output": output})
+
+
+# 🔥 Unsafe Deserialization (RCE possible)
+@app.route('/deserialize', methods=["POST"])
+def deserialize():
+    raw = request.data
+
+    obj = pickle.loads(raw)  # direct RCE vector
+
+    return jsonify({"data": str(obj)})
+
+
+# 🔥 IDOR (no auth at all + sensitive fields)
+@app.route('/profile')
+def profile():
+    user_id = request.args.get('id')
 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    cursor.execute(
-        "SELECT username, email, role FROM users WHERE id = ?",
-        (user_id,)
-    )
+    cursor.execute(f"SELECT username, email, password, ssn FROM users WHERE id = {user_id}")
+    user = cursor.fetchone()
 
-    users = cursor.fetchall()
     conn.close()
 
-    return jsonify({"users": users})
+    return jsonify({"profile": user})
 
 
-# ✅ FIXED: Command Injection
-@app.route('/ping')
-def ping_host():
-    target_ip = request.args.get('ip')
-
-    try:
-        # Validate IP strictly
-        ipaddress.ip_address(target_ip)
-    except:
-        return jsonify({"error": "Invalid IP"}), 400
-
-    try:
-        output = subprocess.check_output(
-            ["ping", "-c", "1", target_ip],
-            text=True
-        )
-        return jsonify({"result": output})
-    except subprocess.CalledProcessError:
-        return jsonify({"error": "Ping failed"}), 500
-
-
-# ✅ FIXED: Unsafe Deserialization (use JSON instead of pickle)
-@app.route('/deserialize')
-def deserialize_data():
-    data = request.args.get('data')
-
-    try:
-        obj = json.loads(data)
-    except:
-        return jsonify({"error": "Invalid JSON"}), 400
-
-    return jsonify({"object": obj})
-
-
-# ✅ FIXED: IDOR (basic authorization check placeholder)
-@app.route('/profile/<user_id>')
-def get_profile(user_id):
-    auth_user = request.headers.get("X-USER-ID")
-
-    if auth_user != user_id:
-        return jsonify({"error": "Unauthorized"}), 403
-
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "SELECT username, email FROM users WHERE id = ?",
-        (user_id,)
-    )
-
-    profile = cursor.fetchone()
-    conn.close()
-
-    return jsonify({"profile": profile})
-
-
-# ✅ FIXED: Open Redirect
+# 🔥 Open Redirect
 @app.route('/redirect')
 def open_redirect():
-    redirect_url = request.args.get('url')
-
-    allowed_domains = ["example.com", "yourapp.com"]
-
-    if not redirect_url or not any(domain in redirect_url for domain in allowed_domains):
-        return jsonify({"error": "Invalid redirect URL"}), 400
-
-    return redirect(redirect_url)
+    url = request.args.get('url')
+    return redirect(url)
 
 
-# ✅ FIXED: Sensitive Data Exposure
-@app.route('/logs')
-def get_logs():
-    # Do NOT log secrets
-    logger.info(f"User accessed logs from IP: {request.remote_addr}")
+# 🔥 Arbitrary File Read (VERY GOOD for agents)
+@app.route('/read')
+def read_file():
+    path = request.args.get('path')
 
-    if not os.path.exists('app.log'):
-        return jsonify({"logs": ""})
+    with open(path, 'r') as f:
+        content = f.read()
 
-    with open('app.log', 'r') as f:
-        logs = f.read()
+    return jsonify({"content": content})
 
-    return jsonify({"logs": logs})
+
+# 🔥 Debug endpoint (info leak)
+@app.route('/debug')
+def debug():
+    return jsonify({
+        "env": dict(os.environ),
+        "cwd": os.getcwd()
+    })
 
 
 if __name__ == '__main__':
-    app.run(port=5000, debug=False)
+    app.run(port=5000, debug=True)
