@@ -1,31 +1,390 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PatchOps Security Terminal</title>
-    <link rel="stylesheet" href="style.css">
+    <title>PATCHOPS SECURITY TERMINAL v2.0</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0d1117;
+            --panel-bg: #161b22;
+            --border-color: #30363d;
+            --text-primary: #c9d1d9;
+            --text-secondary: #8b949e;
+            --accent-color: #3fb950;
+            --info: #58a6ff;
+            --success: #3fb950;
+            --error: #f85149;
+            --warning: #d29922;
+            --neutral: #6e7681;
+            --scanning: #f59e0b;
+            --checking: #388bfd;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg-color);
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        header {
+            padding: 12px 20px;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 16px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo::before {
+            content: "";
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            background: var(--accent-color);
+            border-radius: 50%;
+            box-shadow: 0 0 8px var(--accent-color);
+        }
+
+        #runBtn {
+            background: #238636;
+            color: white;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: background 0.2s;
+        }
+
+        #runBtn:hover {
+            background: #2ea043;
+        }
+
+        #runBtn:disabled {
+            background: #21262d;
+            color: #8b949e;
+            cursor: not-allowed;
+        }
+
+        main {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .terminal-panel {
+            width: 480px;
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            background: #0d1117;
+        }
+
+        .panel-header {
+            padding: 8px 16px;
+            font-size: 11px;
+            text-transform: uppercase;
+            font-weight: bold;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg);
+        }
+
+        #logs {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+
+        .log-entry {
+            margin-bottom: 8px;
+            font-weight: 400;
+        }
+
+        .step-badge {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 9px;
+            font-weight: bold;
+            margin-right: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .badge-GRAPH_BUILDER {
+            background: #1f2937;
+            color: #60a5fa;
+        }
+
+        .badge-CODE_ANALYZER {
+            background: #312e81;
+            color: #818cf8;
+        }
+
+        .badge-PATCH_WRITER {
+            background: #1e3a8a;
+            color: #93c5fd;
+        }
+
+        .badge-COMPONENT_TESTER {
+            background: #21262d;
+            color: #d1d5db;
+        }
+
+        .badge-SYSTEM {
+            background: #161b22;
+            color: #8b949e;
+        }
+
+        .log-info {
+            color: #58a6ff;
+        }
+
+        .log-success {
+            color: #3fb950;
+        }
+
+        .log-error {
+            color: #f85149;
+        }
+
+        .log-warning {
+            color: #d29922;
+        }
+
+        .graph-panel {
+            flex: 1;
+            position: relative;
+            background: #0d1117;
+            overflow: hidden;
+        }
+
+        svg {
+            width: 100%;
+            height: 100%;
+            cursor: grab;
+        }
+
+        svg:active {
+            cursor: grabbing;
+        }
+
+        .node circle {
+            stroke: #30363d;
+            stroke-width: 2.5px;
+            transition: filter 0.3s, fill 0.3s;
+        }
+
+        .node text {
+            fill: #c9d1d9;
+            font-size: 12px;
+            font-weight: 600;
+            pointer-events: none;
+            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+        }
+
+        .link {
+            stroke: #d29922;
+            stroke-opacity: 0.25;
+            stroke-width: 2px;
+        }
+
+        .legend {
+            position: absolute;
+            bottom: 25px;
+            left: 25px;
+            background: rgba(22, 27, 34, 0.9);
+            padding: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 11px;
+            backdrop-filter: blur(5px);
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+
+        .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .vulnerable circle {
+            filter: drop-shadow(0 0 12px #ef4444);
+        }
+
+        .fixed circle {
+            filter: drop-shadow(0 0 12px #238636);
+        }
+
+        .scanning circle {
+            filter: drop-shadow(0 0 12px #f59e0b);
+        }
+
+        .checking circle {
+            filter: drop-shadow(0 0 12px #388bfd);
+        }
+    </style>
 </head>
+
 <body>
-    <div class="terminal">
-        <div class="terminal-header">
-            <div class="terminal-controls">
-                <span class="control close"></span>
-                <span class="control minimize"></span>
-                <span class="control maximize"></span>
-            </div>
-            <div class="terminal-title">PatchOps Security Terminal v1.0</div>
+    <header>
+        <div class="logo">PATCHOPS SECURITY TERMINAL v2.0</div>
+        <button id="runBtn" onclick="runPipeline()">▶ RUN PIPELINE</button>
+    </header>
+    <main>
+        <div class="terminal-panel">
+            <div class="panel-header">Terminal Logs</div>
+            <div id="logs"></div>
         </div>
-        
-        <div class="terminal-body">
-            <div id="terminal-output" class="terminal-output"></div>
-            <div class="terminal-input-line">
-                <span class="prompt">$</span>
-                <input type="text" id="terminal-input" class="terminal-input" placeholder="Type 'run' to start security analysis..." autocomplete="off">
+        <div class="graph-panel">
+            <div class="panel-header">Knowledge Graph</div>
+            <svg id="graph-svg"></svg>
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="dot" style="background:#f59e0b"></div> Scanning
+                </div>
+                <div class="legend-item">
+                    <div class="dot" style="background:#ef4444"></div> Vulnerable
+                </div>
+                <div class="legend-item">
+                    <div class="dot" style="background:#388bfd"></div> Checking
+                </div>
+                <div class="legend-item">
+                    <div class="dot" style="background:#238636"></div> Fixed/OK
+                </div>
             </div>
         </div>
-    </div>
-    
-    <script src="script.js"></script>
+    </main>
+    <script>
+        const clusterMap = {
+            "app.py": 0, "auth.py": 0, "config.py": 0, "db_utils.py": 0, "reports.py": 0,
+            "tests/test_suite.py": 1, "search_engine.py": 1, "analytics.py": 1, "email_service.py": 1, "payment_gateway.py": 1, "api_client.py": 1, "init_db.py": 1,
+            "utils.py": 2, "cache_manager.py": 2, "validator.py": 2, "logger.py": 2, "file_manager.py": 2
+        };
+
+        const colors = { neutral: "#6e7681", scanning: "#f59e0b", vulnerable: "#ef4444", fixed: "#238636", checking: "#388bfd", ok: "#238636" };
+
+        let nodes = [], links = [], simulation, linkElements, nodeElements;
+        const svg = d3.select("#graph-svg"), container = svg.append("g");
+        svg.call(d3.zoom().scaleExtent([0.1, 4]).on("zoom", (e) => container.attr("transform", e.transform)));
+
+        async function loadInitialGraph() {
+            try {
+                const res = await fetch('/graph');
+                const data = await res.json();
+                initGraph(data);
+            } catch (err) { console.error(err); }
+        }
+
+        function initGraph(data) {
+            const width = svg.node().getBoundingClientRect().width, height = svg.node().getBoundingClientRect().height;
+            container.selectAll("*").remove();
+            nodes = data.nodes;
+            links = data.edges.map(e => ({ source: e.source, target: e.target }));
+
+            simulation = d3.forceSimulation(nodes)
+                .force("link", d3.forceLink(links).id(d => d.id).distance(140))
+                .force("charge", d3.forceManyBody().strength(-1200))
+                .force("center", d3.forceCenter(width / 2, height / 2))
+                .force("x", d3.forceX(d => {
+                    const c = clusterMap[d.id] || 0;
+                    // Move group centers closer: 0.35, 0.5, 0.65
+                    return (c === 0) ? width * 0.38 : (c === 1) ? width * 0.5 : width * 0.62;
+                }).strength(0.8))
+                .force("y", d3.forceY(d => {
+                    const c = clusterMap[d.id] || 0;
+                    // Vertical staggering for better spread
+                    return (c === 1) ? height * 0.65 : height * 0.45;
+                }).strength(0.5))
+                .force("collide", d3.forceCollide(50));
+
+            linkElements = container.append("g").selectAll("line").data(links).enter().append("line").attr("class", "link");
+            nodeElements = container.append("g").selectAll(".node").data(nodes).enter().append("g")
+                .attr("class", d => `node ${d.status}`).attr("id", d => `node-${d.id.replace(/[\/\.\\]/g, '-')}`)
+                .call(d3.drag().on("start", (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+                    .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; }).on("end", (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }));
+
+            nodeElements.append("circle").attr("r", 14).attr("fill", d => colors[d.status] || colors.neutral);
+            nodeElements.append("text").attr("dx", 22).attr("dy", 6).text(d => d.id);
+
+            simulation.on("tick", () => {
+                linkElements.attr("x1", d => d.source.x).attr("y1", d => d.source.y).attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+                nodeElements.attr("transform", d => `translate(${d.x},${d.y})`);
+            });
+        }
+
+        function updateNodeStatus(nodeId, status) {
+            const id = `node-${nodeId.replace(/[\/\.\\]/g, '-')}`;
+            const node = d3.select(`#${id}`);
+            if (!node.empty()) {
+                node.select("circle").transition().duration(500).attr("fill", colors[status]);
+                node.attr("class", `node ${status}`);
+            }
+        }
+
+        function appendLog(data) {
+            const logs = document.getElementById('logs');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${data.level || 'neutral'}`;
+            let icon = (data.level === 'success') ? '✓ ' : (data.level === 'error') ? '✖ ' : (data.level === 'warning') ? '⚠ ' : '';
+            const badge = data.step ? `<span class="step-badge badge-${data.step}">${data.step}</span>` : "";
+            entry.innerHTML = `${badge} ${icon}${data.message}`;
+            logs.appendChild(entry);
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        async function runPipeline() {
+            const btn = document.getElementById('runBtn');
+            btn.disabled = true; document.getElementById('logs').innerHTML = "";
+            nodes.forEach(n => updateNodeStatus(n.id, 'neutral'));
+            try {
+                const res = await fetch('/run', { method: 'POST' });
+                const { run_id } = await res.json();
+                const evtSource = new EventSource(`/stream/${run_id}`);
+                evtSource.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'log' || data.type === 'step_start' || data.type === 'step_end') appendLog(data);
+                    if (data.type === 'graph_update') data.nodes.forEach(n => updateNodeStatus(n.id, n.status));
+                    if (data.type === 'done') { evtSource.close(); btn.disabled = false; appendLog({ step: "SYSTEM", message: "PIPELINE COMPLETED. ALL CLUSTERS SECURED.", level: "success" }); }
+                };
+                evtSource.onerror = () => { evtSource.close(); btn.disabled = false; };
+            } catch (err) { btn.disabled = false; }
+        }
+        window.onload = loadInitialGraph;
+    </script>
 </body>
+
 </html>

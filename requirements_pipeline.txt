@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+sse-starlette
+groq
+requests
+PyGithub
+python-dotenv
+httpx
+flask

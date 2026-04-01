@@ -1,104 +1,104 @@
-import os
+import asyncio
 import json
+import os
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()
 
+# Add current directory to sys.path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from lambdas.graph_builder.handler import handler as graph_builder_handler
 from lambdas.code_analyzer.handler import handler as code_analyzer_handler
+from lambdas.exploit_crafter.handler import handler as exploit_crafter_handler
 from lambdas.patch_writer.handler import lambda_handler as patch_writer_handler
-from lambdas.pr_generator.handler import lambda_handler as pr_generator_handler
+from lambdas.security_reviewer.handler import lambda_handler as security_reviewer_handler
+from lambdas.neighbor_resolver.handler import handler as neighbor_resolver_handler
+from lambdas.component_tester.handler import handler as component_tester_handler
 
-def run_local_tests():
-    print("🚀 STARTING BATCH-PROCESSING PIPELINE (Optimized for Rate Limits)...\n")
-
-    # 1. READ THE REAL VULNERABLE FILE
-    target_file_path = "PatchOps-Target/app.py"
-    try:
-        with open(target_file_path, "r") as f:
-            live_source_code = f.read()
-        print(f"✅ Successfully loaded {target_file_path}\n")
-    except FileNotFoundError:
-        print(f"❌ ERROR: Could not find {target_file_path}. Make sure the path is correct.")
-        return
-
-    # 2. INVOKE THE LIVE ANALYZER (LLM CALL #1)
-    print("🔍 ANALYZER: Exhaustive Vulnerability Sweep...")
-    analyzer_event = {"source_code": live_source_code}
-    analyzer_result = code_analyzer_handler(analyzer_event, None)
+async def run_cli_pipeline():
+    TARGET_DIR = "PatchOps-Target"
+    PRIMARY_TARGET = "app.py"
     
-    if "error" in analyzer_result:
-        print(f"❌ Analyzer Failed: {analyzer_result['error']}")
-        return
-
+    print("\n[STEP 0] Building Graph...")
+    graph = graph_builder_handler({"repo_path": TARGET_DIR}, None)
+    print(f"Found {len(graph['nodes'])} files, {len(graph['edges'])} dependencies")
+    
+    print(f"\n[STEP 1] Analyzing {PRIMARY_TARGET}...")
+    with open(os.path.join(TARGET_DIR, PRIMARY_TARGET), 'r') as f:
+        source_code = f.read()
+    
+    analyzer_result = code_analyzer_handler({"source_code": source_code}, None)
     vulnerabilities = analyzer_result.get("vulnerabilities", [])
-    print(f"✅ Found {len(vulnerabilities)} vulnerabilities:\n")
-    for i, v in enumerate(vulnerabilities, 1):
-        vuln_type = v.get('vulnerability_type', 'Unknown')
-        cwe = v.get('cwe', 'CWE-Unknown')
-        severity = v.get('severity', 'UNKNOWN')
-        print(f"  {i}. {vuln_type} ({cwe}) [{severity}]")
-
+    print(f"Found {len(vulnerabilities)} vulnerabilities")
+    
     if not vulnerabilities:
-        print("\n🎉 Code is secure! No patches needed.")
         return
 
-    # 3. INVOKE BATCH PATCHER (LLM CALL #2) - FIX ALL IN ONE SHOT
-    print(f"\n{'='*60}")
-    print(f"🛠️  BATCH PATCHER: Fixing all {len(vulnerabilities)} vulnerabilities...")
-    print(f"{'='*60}\n")
+    print("\n[STEP 2] Crafting Exploit...")
+    sqli_vuln = next((v for v in vulnerabilities if "89" in v.get("cwe", "")), vulnerabilities[0])
+    exploit_result = exploit_crafter_handler({
+        "vulnerability_type": sqli_vuln["vulnerability_type"],
+        "attack_vector": sqli_vuln["attack_vector"],
+        "vulnerable_lines": sqli_vuln["vulnerable_lines"]
+    }, None)
+    print("Exploit ready.")
     
-    patch_event = {
-        "source_code": live_source_code,
-        "vulnerabilities": vulnerabilities  # Pass entire array!
-    }
+    print("\n[STEP 4] Writing Patch...")
+    patch_result = patch_writer_handler({
+        "source_code": source_code,
+        "vulnerabilities": vulnerabilities
+    }, None)
+    patched_code = patch_result.get("patched_code")
+    print(f"Applied {len(patch_result.get('completed_fixes', []))} fixes.")
     
-    patch_result = patch_writer_handler(patch_event, None)
+    print("\n[STEP 5] Reviewing Patch...")
+    review_result = security_reviewer_handler({
+        "original_code": source_code,
+        "patched_code": patched_code,
+        "vulnerability_type": "Batch Fix",
+        "exploit_code": exploit_result.get("exploit_code")
+    }, None)
+    final_patched_code = review_result.get("final_patch")
+    print(f"Patch approved: {review_result.get('patch_approved')}")
     
-    if "error" in patch_result:
-        print(f"❌ Batch Patcher Failed: {patch_result['error']}")
-        return
+    print("\n[STEP 7] Resolving Neighbors...")
+    neighbor_result = neighbor_resolver_handler({
+        "patched_file": PRIMARY_TARGET,
+        "graph": graph
+    }, None)
+    neighbors = neighbor_result.get("neighbors")
+    print(f"Neighbors to check: {neighbors}")
+    
+    print("\n[STEP 8] Testing Components...")
+    for neighbor in neighbors:
+        print(f"Checking {neighbor}...")
+        with open(os.path.join(TARGET_DIR, neighbor), 'r') as f:
+            neighbor_code = f.read()
         
-    completed_fixes = patch_result.get("completed_fixes", [])
-    failed_fixes = patch_result.get("failed_fixes", [])
-    current_source_code = patch_result.get("patched_code")
-    
-    print(f"✅ Batch Patching Complete:")
-    print(f"   ✓ Successfully fixed: {patch_result.get('successful_patches')}/{patch_result.get('total_vulnerabilities')}")
-    
-    if failed_fixes:
-        print(f"   ✗ Failed to fix: {len(failed_fixes)}")
-        for fail in failed_fixes:
-            print(f"      - {fail['type']} ({fail['cwe']}): {fail['reason']}")
-
-    if not completed_fixes:
-        print("\n⚠️  No patches were successfully applied.")
-        return
-
-    # 4. PR GENERATION (LLM CALL #3 - GitHub API)
-    print(f"\n{'='*60}")
-    print(f"📝 PR GENERATOR: Creating pull request with {len(completed_fixes)} fixes...")
-    print(f"{'='*60}\n")
-    
-    pr_event = {
-        "repo_full_name": "gauravmishraokok/PatchOps-Target",
-        "file_path": "app.py",
-        "final_patch": current_source_code,
-        "fixed_vulnerabilities": completed_fixes  # NEW SCHEMA: Pass array directly
-    }
-    
-    pr_result = pr_generator_handler(pr_event, None)
-    
-    if pr_result.get("status") == "SUCCESS":
-        print("✅ Pull Request Created Successfully!")
-        print(f"🔗 PR URL: {pr_result.get('pr_url')}")
-        print(f"🌿 Branch: {pr_result.get('branch_name')}\n")
-        print(f"📊 SUMMARY:")
-        print(f"   • Vulnerabilities Found: {len(vulnerabilities)}")
-        print(f"   • Vulnerabilities Fixed: {len(completed_fixes)}")
-        print(f"   • LLM Calls Made: 3 (Analyzer → Batch Patcher → PR Generator)")
-        print(f"   • Pipeline Status: ✅ SUCCESS")
-    else:
-        print(f"❌ PR Generator Failed: {pr_result.get('error_message')}")
+        test_result = component_tester_handler({
+            "patched_file_name": PRIMARY_TARGET,
+            "original_code": source_code,
+            "patched_code": final_patched_code,
+            "neighbor_file_name": neighbor,
+            "neighbor_code": neighbor_code
+        }, None)
+        
+        if test_result.get("is_compatible"):
+            print(f"  ✓ {neighbor} OK")
+        else:
+            print(f"  ⚠ {neighbor} INCOMPATIBLE")
+            if test_result.get("suggested_fix"):
+                print(f"  Applying fix to {neighbor}...")
+                with open(os.path.join(TARGET_DIR, neighbor), "w") as f:
+                    f.write(test_result["suggested_fix"])
+                    
+    # Save final app.py
+    with open(os.path.join(TARGET_DIR, PRIMARY_TARGET), "w") as f:
+        f.write(final_patched_code)
+        
+    print("\nPipeline Complete!")
 
 if __name__ == "__main__":
-    run_local_tests()
+    asyncio.run(run_cli_pipeline())

@@ -24,13 +24,15 @@ def lambda_handler(event, context=None):
         final_patch = event.get("final_patch", "")
         fixed_vulnerabilities = event.get("fixed_vulnerabilities", [])
 
+        print(f"PR_GENERATOR: Targeting repo {repo_full_name}, file {file_path}")
+
         # Validate required fields
         if not all([repo_full_name, file_path, final_patch]):
             return {
                 "status": "ERROR",
                 "pr_url": "",
                 "branch_name": "",
-                "error_message": "Missing required fields: repo_full_name, file_path, final_patch"
+                "error_message": f"Missing required fields. Received: repo={repo_full_name}, path={file_path}"
             }
 
         # Fetch GitHub token from environment
@@ -47,10 +49,17 @@ def lambda_handler(event, context=None):
         g = Github(github_token)
 
         # Get the repository
-        repo = g.get_repo(repo_full_name)
+        try:
+            repo = g.get_repo(repo_full_name)
+        except GithubException as ge:
+            if ge.status == 404:
+                return {"status": "ERROR", "error_message": f"Repository '{repo_full_name}' not found. Check name and token permissions."}
+            raise ge
 
         # Get the default branch (usually main or master)
         default_branch = repo.default_branch
+        print(f"PR_GENERATOR: Default branch is {default_branch}")
+        
         main_ref = repo.get_git_ref(f"heads/{default_branch}")
         main_sha = main_ref.object.sha
 
@@ -58,11 +67,17 @@ def lambda_handler(event, context=None):
         branch_name = f"patchops-fix-{uuid.uuid4().hex[:8]}"
 
         # Create new branch from main
+        print(f"PR_GENERATOR: Creating branch {branch_name} from {default_branch} ({main_sha})")
         repo.create_git_ref(ref=f"refs/heads/{branch_name}", sha=main_sha)
 
         # Get the current file's SHA (required for update_file)
-        file_contents = repo.get_contents(file_path, ref=default_branch)
-        current_file_sha = file_contents.sha
+        try:
+            file_contents = repo.get_contents(file_path, ref=default_branch)
+            current_file_sha = file_contents.sha
+        except GithubException as ge:
+            if ge.status == 404:
+                return {"status": "ERROR", "error_message": f"File '{file_path}' not found in repo '{repo_full_name}' on branch '{default_branch}'."}
+            raise ge
 
         # Update the file on the new branch with the patched code
         vulnerability_summary = f"{len(fixed_vulnerabilities)} vulnerabilities" if fixed_vulnerabilities else "security fixes"
@@ -75,14 +90,14 @@ def lambda_handler(event, context=None):
             branch=branch_name
         )
 
-        # Generate the PR body markdown using the new dynamic template
+        # Generate the PR body markdown
         pr_body = generate_pr_body(fixed_vulnerabilities_list=fixed_vulnerabilities)
 
         # Create the Pull Request title
-        if fixed_vulnerabilities:
+        if fixed_vulnerabilities and fixed_vulnerabilities[0].get('vulnerability_type') != "Dependency Consistency Fix":
             pr_title = f"🔒 Security Patch: {len(fixed_vulnerabilities)} Vulnerabilities Fixed"
         else:
-            pr_title = "🔒 Security Patch: Autonomous Fixes"
+            pr_title = f"🔒 Security Patch: {file_path} consistency fix"
 
         # Create the Pull Request
         pr = repo.create_pull(
@@ -92,7 +107,6 @@ def lambda_handler(event, context=None):
             base=default_branch
         )
 
-        # Return success response
         return {
             "status": "SUCCESS",
             "pr_url": pr.html_url,
@@ -100,8 +114,7 @@ def lambda_handler(event, context=None):
         }
 
     except GithubException as e:
-        # Handle GitHub API errors gracefully
-        error_msg = f"GitHub API error: {str(e)}"
+        error_msg = f"GitHub API error: {e.status} {e.data.get('message', str(e))}"
         print(f"ERROR: {error_msg}")
         return {
             "status": "ERROR",
@@ -111,7 +124,6 @@ def lambda_handler(event, context=None):
         }
 
     except Exception as e:
-        # Handle any other unexpected errors
         error_msg = f"PR generation exception: {str(e)}"
         print(f"ERROR: {error_msg}")
         return {
