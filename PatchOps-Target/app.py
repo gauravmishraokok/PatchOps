@@ -1,78 +1,52 @@
-from flask import Flask, request, jsonify, redirect
-import sqlite3
-import subprocess
-import pickle
 import os
-import logging
+import subprocess
+from flask import Flask, request, jsonify
+import auth
+import config
+import db_utils
+import reports
 
 app = Flask(__name__)
-
-# CWE-798: Hardcoded Secrets
-DATABASE_PASSWORD = "admin123"
-API_KEY = "sk-1234567890abcdef"
-SECRET_TOKEN = "supersecrettoken2024"
-
-# Database connection
-DB_PATH = "users.db"
 
 @app.route('/health')
 def health():
     return jsonify({"status": "ok"})
 
-# CWE-89: SQL Injection
-@app.route('/user')
+@app.get('/user')
 def get_user():
+    # CWE-89 SQL Injection: Directly inserting user input into query string
     user_id = request.args.get('id')
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_utils.get_connection()
     cursor = conn.cursor()
-    query = f"SELECT username, email, role FROM users WHERE id = {user_id}"
-    cursor.execute(query)
-    users = cursor.fetchall()
+    # Vulnerable line: f-string insertion
+    query = "SELECT username, email, role FROM users WHERE id = %s"
+    cursor.execute(query, (user_id,))
+    user = cursor.fetchone()
     conn.close()
-    return jsonify({"users": users})
+    if user:
+        return jsonify({"username": user[0], "email": user[1], "role": user[2]})
+    return jsonify({"error": "User not found"}), 404
 
-# CWE-78: Command Injection
-@app.route('/ping')
-def ping_host():
-    target_ip = request.args.get('ip')
-    command = f"ping -c 1 {target_ip}"
-    output = subprocess.check_output(command, shell=True, text=True)
-    return jsonify({"result": output})
+@app.get('/ping')
+def ping():
+    # CWE-78 Command Injection: Unsafe shell execution of user input
+    ip = request.args.get('ip')
+    try:
+        # Vulnerable line: shell=True and f-string
+        output = subprocess.check_output(['ping', '-n', '1', ip], stdout=subprocess.PIPE)
+        return jsonify({"output": output.decode()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-# CWE-502: Unsafe Deserialization
-@app.route('/deserialize')
-def deserialize_data():
-    data = request.args.get('data')
-    obj = pickle.loads(bytes.fromhex(data))
-    return jsonify({"object": str(obj)})
-
-# CWE-639: Insecure Direct Object Reference (IDOR)
-@app.route('/profile/<user_id>')
-def get_profile(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT username, email, ssn FROM users WHERE id = ?", (user_id,))
-    profile = cursor.fetchone()
-    conn.close()
-    return jsonify({"profile": profile})
-
-# CWE-601: Open Redirect
-@app.route('/redirect')
-def open_redirect():
-    redirect_url = request.args.get('url')
-    return redirect(redirect_url)
-
-# CWE-200: Sensitive Data Exposure
-@app.route('/logs')
-def get_logs():
-    logging.basicConfig(filename='app.log', level=logging.DEBUG)
-    logger = logging.getLogger()
-    logger.debug(f"User login attempt with IP: {request.remote_addr}")
-    logger.debug(f"Database password: {DATABASE_PASSWORD}")
-    logger.debug(f"API key: {API_KEY}")
-    with open('app.log', 'r') as f:
-        logs = f.read()
-    return jsonify({"logs": logs})
+@app.get('/profile')
+def profile():
+    user_id = request.args.get('id')
+    profile_data = auth.get_profile(user_id)
+    if profile_data:
+        return jsonify({"profile": profile_data})
+    return jsonify({"error": "Profile not found"}), 404
 
 if __name__ == '__main__':
-    app.run(port=5000, debug=True)
+    import init_db
+    init_db.init()
+    app.run(port=5000)
