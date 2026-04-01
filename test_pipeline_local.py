@@ -1,193 +1,190 @@
-import os
-import sys
-import json
-import time
-import subprocess
-import tempfile
-import signal
+import os, sys
 
-# Ensure repo root is in path
-sys.path.insert(0, os.path.abspath("."))
-
-# =========================
-# STEP 1: LOAD ENV
-# =========================
-print("\n=== STEP 0: LOAD ENV ===")
-
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-if not GROQ_API_KEY:
-    print("❌ ERROR: GROQ_API_KEY not set in environment")
+# ==========================
+# ENVIRONMENT SETUP
+# ==========================
+api_key = os.environ.get('GROQ_API_KEY')
+if not api_key:
+    print("ERROR: GROQ_API_KEY environment variable not set")
+    print("Run: export GROQ_API_KEY=gsk_your_key_here")
     sys.exit(1)
-
-# =========================
-# STEP 2: DEFINE VULNERABLE APP
-# =========================
-print("\n=== STEP 1: LOAD VULNERABLE APP SOURCE ===")
 
 VULNERABLE_APP_SOURCE = """
 from flask import Flask, request, jsonify
 import sqlite3
 
 app = Flask(__name__)
+DB_PATH = "/tmp/users.db"
 
-def get_db():
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    conn.execute("CREATE TABLE users (username TEXT, email TEXT, role TEXT)")
-    conn.execute("INSERT INTO users VALUES ('alice', 'alice@example.com', 'user')")
-    conn.execute("INSERT INTO users VALUES ('bob', 'bob@example.com', 'admin')")
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(\"\"\"CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY, username TEXT, email TEXT, role TEXT
+    )\"\"\")
+    conn.execute("DELETE FROM users")
+    conn.execute("INSERT INTO users VALUES (1, 'alice', 'alice@corp.com', 'admin')")
+    conn.execute("INSERT INTO users VALUES (2, 'bob', 'bob@corp.com', 'user')")
     conn.commit()
-    return conn
-
-db = get_db()
+    conn.close()
 
 @app.route('/user')
 def get_user():
     user_id = request.args.get('id', '')
-    query = f"SELECT username, email, role FROM users WHERE rowid = {user_id}"
-    cursor = db.execute(query)
-    results = cursor.fetchall()
-    return jsonify({"users": results})
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    query = f"SELECT username, email, role FROM users WHERE id = {user_id}"
+    try:
+        cursor.execute(query)
+        result = cursor.fetchall()
+        return jsonify({"users": result})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+@app.route('/health')
+def health():
+    return jsonify({"status": "ok"})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    init_db()
+    app.run(host='0.0.0.0', port=5000, debug=False)
 """
 
-# =========================
-# STEP 3: RUN CODE ANALYZER
-# =========================
-print("\n=== STEP 2: CODE ANALYZER ===")
+# ==========================
+# IMPORT HANDLERS
+# ==========================
+sys.path.insert(0, os.path.dirname(__file__))
+from lambdas.code_analyzer.handler import handler as analyze
+from lambdas.exploit_crafter.handler import handler as craft_exploit
+
+import subprocess
+import time
+import requests
+import pprint
+import tempfile
+import shutil
+
+pp = pprint.PrettyPrinter(indent=2)
+
+# ==========================
+# STEP 0 — HEALTH CHECK
+# ==========================
+print("Checking Groq API connection...")
+try:
+    from lambdas.utils.groq_client import call_llm
+    response = call_llm(prompt="Reply with the single word: READY")
+    if "READY" in response.upper():
+        print("✅ Groq API connected")
+    else:
+        print("⚠ Groq API responded:", response)
+except Exception as e:
+    print("⚠ Health check failed:", str(e))
+
+# ==========================
+# STEP 1 — CODE ANALYZER
+# ==========================
+print("\n=== STEP 1: CODE ANALYZER ===")
+analyzer_event = {"source_code": VULNERABLE_APP_SOURCE}
+try:
+    analyzer_result = analyze(analyzer_event)
+    pp.pprint(analyzer_result)
+    if "error" in analyzer_result:
+        print("Analyzer error:", analyzer_result["error"])
+        sys.exit(1)
+except Exception as e:
+    print("Analyzer failed:", str(e))
+    sys.exit(1)
+
+# ==========================
+# STEP 2 — EXPLOIT CRAFTER
+# ==========================
+print("\n=== STEP 2: EXPLOIT CRAFTER ===")
+try:
+    craft_result = craft_exploit(analyzer_result)
+    exploit_code = craft_result.get("exploit_code", "")
+    if exploit_code:
+        print(exploit_code)
+    if "error" in craft_result and not exploit_code:
+        print("Exploit crafting failed:", craft_result["error"])
+        sys.exit(1)
+    if "warnings" in craft_result:
+        for w in craft_result["warnings"]:
+            print(f"\033[93mWarning: {w}\033[0m")
+except Exception as e:
+    print("Exploit crafting exception:", str(e))
+    sys.exit(1)
+
+# ==========================
+# STEPS 3-8 — RUN APP AND EXPLOIT
+# ==========================
+flask_proc = None
+tmp_app_file = "/tmp/patchops_app_test.py"
+tmp_exploit_file = "/tmp/patchops_exploit_test.py"
 
 try:
-    from lambdas.code_analyzer.handler import handler as analyzer_handler
-
-    analyzer_event = {
-        "source_code": VULNERABLE_APP_SOURCE,
-        "cve_description": "SQL Injection via unsanitized GET parameter id"
-    }
-
-    analyzer_result = analyzer_handler(analyzer_event)
-
-    print(json.dumps(analyzer_result, indent=2))
-
-    if "error" in analyzer_result:
-        print("❌ Analyzer failed")
+    # STEP 3 — START FLASK APP
+    print("\n=== STEP 3: STARTING TARGET APP ===")
+    with open(tmp_app_file, "w") as f:
+        f.write(VULNERABLE_APP_SOURCE)
+    flask_proc = subprocess.Popen(['python3', tmp_app_file],
+                                  stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE,
+                                  text=True)
+    time.sleep(3)
+    try:
+        r = requests.get('http://localhost:5000/health', timeout=5)
+        if r.status_code == 200 and r.json().get("status") == "ok":
+            print("✅ Target app running on :5000")
+        else:
+            raise RuntimeError("Health check failed")
+    except Exception as e:
+        print("App failed to start:", str(e))
+        if flask_proc:
+            out, err = flask_proc.communicate(timeout=5)
+            print("stdout:", out)
+            print("stderr:", err)
         sys.exit(1)
 
-except Exception as e:
-    print(f"❌ Analyzer exception: {e}")
-    sys.exit(1)
+    # STEP 4 — NORMAL REQUEST
+    print("\n=== STEP 4: BASELINE REQUEST (no injection) ===")
+    try:
+        r = requests.get("http://localhost:5000/user?id=1")
+        print(r.json())
+    except Exception as e:
+        print("⚠ Baseline request failed:", str(e))
 
-# =========================
-# STEP 4: RUN EXPLOIT CRAFTER
-# =========================
-print("\n=== STEP 3: EXPLOIT CRAFTER ===")
-
-try:
-    from lambdas.exploit_crafter.handler import handler as exploit_handler
-
-    exploit_event = {
-        "source_code": VULNERABLE_APP_SOURCE,
-        "vulnerable_lines": analyzer_result.get("vulnerable_lines", []),
-        "vulnerability_type": analyzer_result.get("vulnerability_type"),
-        "attack_vector": analyzer_result.get("attack_vector")
-    }
-
-    exploit_result = exploit_handler(exploit_event)
-
-    exploit_code = exploit_result.get("exploit_code", "")
-
-    print("\n--- GENERATED EXPLOIT ---\n")
-    print(exploit_code)
-
-    if "error" in exploit_result:
-        print("❌ Exploit crafter returned error")
-
-except Exception as e:
-    print(f"❌ Exploit crafter exception: {e}")
-    sys.exit(1)
-
-# =========================
-# STEP 5: START FLASK APP
-# =========================
-print("\n=== STEP 4: START TARGET APP ===")
-
-app_file = os.path.join(tempfile.gettempdir(), "patchops_target_test.py")
-
-with open(app_file, "w") as f:
-    f.write(VULNERABLE_APP_SOURCE)
-
-proc = subprocess.Popen(
-    ["python", app_file],
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    text=True
-)
-
-time.sleep(3)
-
-if proc.poll() is not None:
-    stdout, stderr = proc.communicate()
-    print("❌ Flask app failed to start")
-    print("STDOUT:\n", stdout)
-    print("STDERR:\n", stderr)
-    sys.exit(1)
-
-print("✅ Flask app running on http://localhost:5000")
-
-# =========================
-# STEP 6: RUN EXPLOIT
-# =========================
-print("\n=== STEP 5: RUN EXPLOIT ===")
-
-exploit_file = os.path.join(tempfile.gettempdir(), "patchops_exploit_test.py")
-
-with open(exploit_file, "w") as f:
-    f.write(exploit_code)
-
-try:
-    result = subprocess.run(
-        ["python", exploit_file],
-        capture_output=True,
-        text=True,
-        timeout=30
-    )
-
-    print("\n--- EXPLOIT STDOUT ---\n")
+    # STEP 5 — RUN EXPLOIT
+    print("\n=== STEP 5: RUNNING EXPLOIT ===")
+    with open(tmp_exploit_file, "w") as f:
+        f.write(exploit_code)
+    result = subprocess.run(['python3', tmp_exploit_file],
+                            capture_output=True, text=True, timeout=30)
+    print("=== EXPLOIT STDOUT ===")
     print(result.stdout)
-
-    print("\n--- EXPLOIT STDERR ---\n")
+    print("=== EXPLOIT STDERR ===")
     print(result.stderr)
 
-except subprocess.TimeoutExpired:
-    print("❌ Exploit execution timed out")
-    proc.terminate()
-    sys.exit(1)
+    # STEP 6 — RESULT
+    if "EXPLOIT_SUCCESS" in result.stdout:
+        print("\n✅ RED TEAM PIPELINE WORKING — exploit confirmed SQL injection")
+    else:
+        print("\n❌ EXPLOIT DID NOT PRINT EXPLOIT_SUCCESS")
+        print("Possible reasons:")
+        print("  1. Groq generated a wrong exploit — re-run to try a different generation")
+        print("  2. The EXPLOIT_SUCCESS string is missing — check exploit code above")
+        print("  3. The app didn't start correctly — check Step 3 output")
 
-# =========================
-# STEP 7: CHECK RESULT
-# =========================
-print("\n=== STEP 6: RESULT ===")
-
-if "EXPLOIT_SUCCESS" in result.stdout:
-    print("✅ RED TEAM PIPELINE WORKING")
-else:
-    print("❌ EXPLOIT DID NOT SUCCEED — check exploit code above")
-
-# =========================
-# STEP 8: CLEANUP
-# =========================
-print("\n=== STEP 7: CLEANUP ===")
-
-try:
-    proc.terminate()
-    proc.wait(timeout=5)
-except Exception:
-    proc.kill()
-
-for path in [app_file, exploit_file]:
-    try:
-        os.remove(path)
-    except Exception:
-        pass
-
-print("🧹 Cleanup complete")
+finally:
+    # STEP 7 — CLEANUP
+    print("\n=== STEP 7: CLEANUP ===")
+    if flask_proc:
+        flask_proc.terminate()
+        flask_proc.wait()
+    for fpath in [tmp_app_file, tmp_exploit_file]:
+        try:
+            if os.path.exists(fpath):
+                os.remove(fpath)
+        except Exception:
+            pass
+    print("Cleanup done")
