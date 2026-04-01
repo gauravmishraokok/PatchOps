@@ -74,5 +74,16 @@ def get_logs():
         logs = f.read()
     return jsonify({"logs": logs})
 
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, role TEXT, ssn TEXT)")
+    cursor.execute("INSERT OR IGNORE INTO users VALUES (1, 'alice', 'alice@test.com', 'admin', '123-45-6789')")
+    cursor.execute("INSERT OR IGNORE INTO users VALUES (2, 'bob', 'bob@test.com', 'user', '987-65-4321')")
+    cursor.execute("INSERT OR IGNORE INTO users VALUES (3, 'charlie', 'charlie@test.com', 'user', '555-12-3456')")
+    conn.commit()
+    conn.close()
+
 if __name__ == '__main__':
+    init_db()
     app.run(port=5000, debug=True)
