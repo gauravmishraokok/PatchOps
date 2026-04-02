@@ -153,9 +153,24 @@
             color: #93c5fd;
         }
 
+        .badge-SYSTEM_TESTER {
+            background: #3c2a4d;
+            color: #d8b4fe;
+        }
+
+        .badge-REQ_CHECKER {
+            background: #4d2a2a;
+            color: #fca5a5;
+        }
+
         .badge-COMPONENT_TESTER {
             background: #21262d;
             color: #d1d5db;
+        }
+
+        .badge-PR_GENERATOR {
+            background: #238636;
+            color: #ffffff;
         }
 
         .badge-SYSTEM {
@@ -176,6 +191,43 @@
         }
 
         .log-warning {
+            color: #d29922;
+        }
+
+        /* Test results panel */
+        .test-results-panel {
+            background: #090c10;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+            font-family: inherit;
+            font-size: 11px;
+        }
+
+        .test-pass {
+            color: #3fb950;
+            white-space: pre;
+        }
+
+        .test-fail {
+            color: #f85149;
+            white-space: pre;
+        }
+
+        .test-summary-pass {
+            margin-top: 8px;
+            border-top: 1px solid #30363d;
+            padding-top: 4px;
+            font-weight: bold;
+            color: #3fb950;
+        }
+
+        .test-summary-warn {
+            margin-top: 8px;
+            border-top: 1px solid #30363d;
+            padding-top: 4px;
+            font-weight: bold;
             color: #d29922;
         }
 
@@ -216,31 +268,6 @@
             stroke-width: 2px;
         }
 
-        .legend {
-            position: absolute;
-            bottom: 25px;
-            left: 25px;
-            background: rgba(22, 27, 34, 0.9);
-            padding: 12px;
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            font-size: 11px;
-            backdrop-filter: blur(5px);
-        }
-
-        .legend-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 6px;
-        }
-
-        .dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-        }
-
         .vulnerable circle {
             filter: drop-shadow(0 0 12px #ef4444);
         }
@@ -272,20 +299,6 @@
         <div class="graph-panel">
             <div class="panel-header">Knowledge Graph</div>
             <svg id="graph-svg"></svg>
-            <div class="legend">
-                <div class="legend-item">
-                    <div class="dot" style="background:#f59e0b"></div> Scanning
-                </div>
-                <div class="legend-item">
-                    <div class="dot" style="background:#ef4444"></div> Vulnerable
-                </div>
-                <div class="legend-item">
-                    <div class="dot" style="background:#388bfd"></div> Checking
-                </div>
-                <div class="legend-item">
-                    <div class="dot" style="background:#238636"></div> Fixed/OK
-                </div>
-            </div>
         </div>
     </main>
     <script>
@@ -321,12 +334,10 @@
                 .force("center", d3.forceCenter(width / 2, height / 2))
                 .force("x", d3.forceX(d => {
                     const c = clusterMap[d.id] || 0;
-                    // Move group centers closer: 0.35, 0.5, 0.65
                     return (c === 0) ? width * 0.38 : (c === 1) ? width * 0.5 : width * 0.62;
                 }).strength(0.8))
                 .force("y", d3.forceY(d => {
                     const c = clusterMap[d.id] || 0;
-                    // Vertical staggering for better spread
                     return (c === 1) ? height * 0.65 : height * 0.45;
                 }).strength(0.5))
                 .force("collide", d3.forceCollide(50));
@@ -355,6 +366,72 @@
             }
         }
 
+        function renderTestResults(data) {
+            const logs = document.getElementById('logs');
+            const panel = document.createElement('div');
+            panel.className = 'test-results-panel';
+
+            const header = document.createElement('div');
+            header.style.borderBottom = "1px solid #30363d";
+            header.style.marginBottom = "8px";
+            header.style.paddingBottom = "4px";
+            header.style.color = "#8b949e";
+            header.textContent = "SMOKE TEST RESULTS";
+            panel.appendChild(header);
+
+            data.test_results.forEach(t => {
+                const row = document.createElement('div');
+                row.className = t.status === 'PASSED' ? 'test-pass' : 'test-fail';
+                row.textContent = `${t.status === 'PASSED' ? '✓' : '✕'} ${t.name.padEnd(35)} [${t.duration_ms}ms]`;
+                panel.appendChild(row);
+            });
+
+            const summary = document.createElement('div');
+            summary.className = data.all_passed ? 'test-summary-pass' : 'test-summary-warn';
+            summary.textContent = `${data.passed}/${data.total} PASSED`;
+            panel.appendChild(summary);
+
+            logs.appendChild(panel);
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        function renderReqAudit(data) {
+            const logs = document.getElementById('logs');
+            const panel = document.createElement('div');
+            panel.className = 'test-results-panel';
+
+            const header = document.createElement('div');
+            header.style.borderBottom = "1px solid #30363d";
+            header.style.marginBottom = "8px";
+            header.style.paddingBottom = "4px";
+            header.style.color = "#8b949e";
+            header.textContent = "SUPPLY CHAIN AUDIT";
+            panel.appendChild(header);
+
+            if (data.flagged.length > 0) {
+                data.flagged.forEach(f => {
+                    const row = document.createElement('div');
+                    row.className = 'test-fail';
+                    row.style.color = f.severity === 'HIGH' ? '#f85149' : '#d29922';
+                    row.textContent = `⚠ [${f.severity.padEnd(6)}] ${f.package.padEnd(10)} — ${f.reason}`;
+                    panel.appendChild(row);
+                });
+            } else {
+                const row = document.createElement('div');
+                row.className = 'test-pass';
+                row.textContent = `✓ All ${data.all_packages.length} packages verified clean.`;
+                panel.appendChild(row);
+            }
+
+            const summary = document.createElement('div');
+            summary.className = data.overall_risk === 'LOW' ? 'test-summary-pass' : 'test-summary-warn';
+            summary.textContent = `Risk Level: ${data.overall_risk}  |  ${data.flagged.length} flagged`;
+            panel.appendChild(summary);
+
+            logs.appendChild(panel);
+            logs.scrollTop = logs.scrollHeight;
+        }
+
         function appendLog(data) {
             const logs = document.getElementById('logs');
             const entry = document.createElement('div');
@@ -364,6 +441,13 @@
             entry.innerHTML = `${badge} ${icon}${data.message}`;
             logs.appendChild(entry);
             logs.scrollTop = logs.scrollHeight;
+
+            if (data.type === 'step_end' && data.step === 'SYSTEM_TESTER' && data.data) {
+                renderTestResults(data.data);
+            }
+            if (data.type === 'step_end' && data.step === 'REQ_CHECKER' && data.data) {
+                renderReqAudit(data.data);
+            }
         }
 
         async function runPipeline() {
@@ -378,7 +462,7 @@
                     const data = JSON.parse(event.data);
                     if (data.type === 'log' || data.type === 'step_start' || data.type === 'step_end') appendLog(data);
                     if (data.type === 'graph_update') data.nodes.forEach(n => updateNodeStatus(n.id, n.status));
-                    if (data.type === 'done') { evtSource.close(); btn.disabled = false; appendLog({ step: "SYSTEM", message: "PIPELINE COMPLETED. ALL CLUSTERS SECURED.", level: "success" }); }
+                    if (data.type === 'done') { evtSource.close(); btn.disabled = false; }
                 };
                 evtSource.onerror = () => { evtSource.close(); btn.disabled = false; };
             } catch (err) { btn.disabled = false; }

@@ -19,8 +19,7 @@ def get_user():
     conn = db_utils.get_connection()
     cursor = conn.cursor()
     # Vulnerable line: f-string insertion
-    query = f"SELECT username, email, role FROM users WHERE id = {user_id}"
-    cursor.execute(query)
+    query = cursor.execute("SELECT username, email, role FROM users WHERE id = ?", (user_id,))
     user = cursor.fetchone()
     conn.close()
     if user:

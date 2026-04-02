@@ -23,6 +23,10 @@ def lambda_handler(event, context=None):
         file_path = event.get("file_path", "")
         final_patch = event.get("final_patch", "")
         fixed_vulnerabilities = event.get("fixed_vulnerabilities", [])
+        
+        # NEW: Extra audit results
+        req_check_result = event.get("req_check_result")
+        test_results = event.get("test_results", [])
 
         print(f"PR_GENERATOR: Targeting repo {repo_full_name}, file {file_path}")
 
@@ -56,10 +60,8 @@ def lambda_handler(event, context=None):
                 return {"status": "ERROR", "error_message": f"Repository '{repo_full_name}' not found. Check name and token permissions."}
             raise ge
 
-        # Get the default branch (usually main or master)
+        # Get the default branch
         default_branch = repo.default_branch
-        print(f"PR_GENERATOR: Default branch is {default_branch}")
-        
         main_ref = repo.get_git_ref(f"heads/{default_branch}")
         main_sha = main_ref.object.sha
 
@@ -67,19 +69,18 @@ def lambda_handler(event, context=None):
         branch_name = f"patchops-fix-{uuid.uuid4().hex[:8]}"
 
         # Create new branch from main
-        print(f"PR_GENERATOR: Creating branch {branch_name} from {default_branch} ({main_sha})")
         repo.create_git_ref(ref=f"refs/heads/{branch_name}", sha=main_sha)
 
-        # Get the current file's SHA (required for update_file)
+        # Get the current file's SHA
         try:
             file_contents = repo.get_contents(file_path, ref=default_branch)
             current_file_sha = file_contents.sha
         except GithubException as ge:
             if ge.status == 404:
-                return {"status": "ERROR", "error_message": f"File '{file_path}' not found in repo '{repo_full_name}' on branch '{default_branch}'."}
+                return {"status": "ERROR", "error_message": f"File '{file_path}' not found in repo '{repo_full_name}'."}
             raise ge
 
-        # Update the file on the new branch with the patched code
+        # Update the file
         vulnerability_summary = f"{len(fixed_vulnerabilities)} vulnerabilities" if fixed_vulnerabilities else "security fixes"
         commit_message = f"Auto-patch: Fix {vulnerability_summary}"
         repo.update_file(
@@ -90,14 +91,17 @@ def lambda_handler(event, context=None):
             branch=branch_name
         )
 
-        # Generate the PR body markdown
-        pr_body = generate_pr_body(fixed_vulnerabilities_list=fixed_vulnerabilities)
+        # Generate the PR body markdown - PASS NEW RESULTS
+        pr_body = generate_pr_body(
+            fixed_vulnerabilities_list=fixed_vulnerabilities,
+            req_check_result=req_check_result,
+            test_results=test_results
+        )
 
         # Create the Pull Request title
+        pr_title = "🔒 Security Patch: Autonomous Remediation & Verification"
         if fixed_vulnerabilities and fixed_vulnerabilities[0].get('vulnerability_type') != "Dependency Consistency Fix":
-            pr_title = f"🔒 Security Patch: {len(fixed_vulnerabilities)} Vulnerabilities Fixed"
-        else:
-            pr_title = f"🔒 Security Patch: {file_path} consistency fix"
+             pr_title = f"🔒 Security Patch: {len(fixed_vulnerabilities)} Vulnerabilities Fixed"
 
         # Create the Pull Request
         pr = repo.create_pull(
@@ -115,20 +119,8 @@ def lambda_handler(event, context=None):
 
     except GithubException as e:
         error_msg = f"GitHub API error: {e.status} {e.data.get('message', str(e))}"
-        print(f"ERROR: {error_msg}")
-        return {
-            "status": "ERROR",
-            "pr_url": "",
-            "branch_name": "",
-            "error_message": error_msg
-        }
+        return {"status": "ERROR", "pr_url": "", "branch_name": "", "error_message": error_msg}
 
     except Exception as e:
         error_msg = f"PR generation exception: {str(e)}"
-        print(f"ERROR: {error_msg}")
-        return {
-            "status": "ERROR",
-            "pr_url": "",
-            "branch_name": "",
-            "error_message": error_msg
-        }
+        return {"status": "ERROR", "pr_url": "", "branch_name": "", "error_message": error_msg}
